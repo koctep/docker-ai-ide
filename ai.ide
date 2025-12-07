@@ -1,0 +1,54 @@
+#!/bin/bash
+
+case $(basename $_ .ide) in
+  zed)
+    CMD='zed --foreground .'
+    ;;
+  cursor)
+    CMD='cursor .'
+    ;;
+  *)
+    CMD=bash
+    ;;
+esac
+RUNCMD=${@:-${CMD}}
+AI_PROFILE=${AI_PROFILE:-default}
+
+[ -z $AI_PROFILE ] && echo "no profile defined" && exit 1
+PROFILE_DIR=${HOME}/ai-ide/${AI_PROFILE}
+mkdir -p $PROFILE_DIR/src
+
+if [ ! -z ${AI_USE_PROXY} ]; then
+  PROXY_IP=$(ip route get 8.8.8.8 | head -n 1 | awk '{print $7}')
+  OPTS="$OPTS -e ALL_PROXY=socks5h://${PROXY_IP}:5020"
+fi
+
+# Build docker run command with proper environment variable handling
+DOCKER_CMD="docker run -it --rm"
+DOCKER_CMD="$DOCKER_CMD --device=/dev/dri"
+DOCKER_CMD="$DOCKER_CMD --cap-add SYS_ADMIN"
+DOCKER_CMD="$DOCKER_CMD --group-add $(getent group render | cut -d: -f3)"
+DOCKER_CMD="$DOCKER_CMD --group-add $(getent group video | cut -d: -f3)"
+DOCKER_CMD="$DOCKER_CMD -u $UID:44"
+DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
+DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
+DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
+DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
+DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
+DOCKER_CMD="$DOCKER_CMD -w /home/src"
+DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY}"
+DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
+DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
+DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID/bus"
+
+
+# Add git environment variables if they exist
+[ ! -z "${GIT_AUTHOR_NAME}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_AUTHOR_NAME=\"${GIT_AUTHOR_NAME}\""
+[ ! -z "${GIT_AUTHOR_EMAIL}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_AUTHOR_EMAIL=\"${GIT_AUTHOR_EMAIL}\""
+[ ! -z "${GIT_COMMITTER_NAME}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_COMMITTER_NAME=\"${GIT_COMMITTER_NAME}\""
+[ ! -z "${GIT_COMMITER_EMAIL}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_COMMITER_EMAIL=\"${GIT_COMMITER_EMAIL}\""
+
+# Execute the docker command
+eval "$DOCKER_CMD ai-ide ${RUNCMD}"
+
+exit 0

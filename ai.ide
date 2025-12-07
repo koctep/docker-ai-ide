@@ -29,6 +29,8 @@ DOCKER_CMD="$DOCKER_CMD --device=/dev/dri"
 DOCKER_CMD="$DOCKER_CMD --cap-add SYS_ADMIN"
 DOCKER_CMD="$DOCKER_CMD --group-add $(getent group render | cut -d: -f3)"
 DOCKER_CMD="$DOCKER_CMD --group-add $(getent group video | cut -d: -f3)"
+[ -n "$(getent group audio)" ] && DOCKER_CMD="$DOCKER_CMD --group-add $(getent group audio | cut -d: -f3)"
+DOCKER_CMD="$DOCKER_CMD --device=/dev/snd"
 DOCKER_CMD="$DOCKER_CMD -u $UID:44"
 DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
 DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
@@ -40,7 +42,6 @@ DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY}"
 DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
 DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
 DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID/bus"
-
 
 # Add git environment variables if they exist
 [ ! -z "${GIT_AUTHOR_NAME}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_AUTHOR_NAME=\"${GIT_AUTHOR_NAME}\""

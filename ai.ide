@@ -17,6 +17,7 @@ AI_PROFILE=${AI_PROFILE:-default}
 [ -z $AI_PROFILE ] && echo "no profile defined" && exit 1
 PROFILE_DIR=${HOME}/ai-ide/${AI_PROFILE}
 mkdir -p $PROFILE_DIR/src
+SHARED_DIR=${HOME}/ai-ide/shared
 
 if [ ! -z ${AI_USE_PROXY} ]; then
   PROXY_IP=$(ip route get 8.8.8.8 | head -n 1 | awk '{print $7}')
@@ -36,6 +37,7 @@ DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
 DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
 DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
 DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
+[ -d ${SHARED_DIR} ] && DOCKER_CMD="$DOCKER_CMD -v ${SHARED_DIR}:/home/shared"
 DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
 DOCKER_CMD="$DOCKER_CMD -w /home/src"
 DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY}"

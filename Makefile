@@ -10,3 +10,6 @@ run: force
 	./cursor.ide bash
 
 force:
+
+exit:
+	exit 0

@@ -71,7 +71,7 @@ Profiles create isolated environments for different projects:
 export AI_PROFILE="project-name"
 ```
 
-Profile data is stored in `~/ai-ide/${AI_PROFILE}/` and includes:
+Profile data is stored in `~/.local/share/ai-ide/${AI_PROFILE}/` and includes:
 - Editor configurations
 - Project files
 - User settings
@@ -104,22 +104,160 @@ codex "Your coding request"
 ### File Structure
 
 ```
-~/ai-ide/
-├── [profile-name]/           # Profile-specific data
-│   ├── src/                 # Your project source code (mounted from host)
-│   ├── .config/             # Editor configurations
+~/.local/share/ai-ide/
+├── [profile-name]/          # Profile-specific data, mounted as /home
+│   ├── .claude/             # Agent state and configuration
+│   ├── .codex/              # ... one directory per agent
 │   └── ...                  # Other user data
+└── shared/                  # Optional, mounted as /home/shared
 ```
 
 ## Configuration
+
+Three host directories are involved, all of them derived from the profile name
+and the project directory name (`PRJ` below is `$(basename $PWD)`):
+
+| Shorthand | Host path | Holds |
+|-----------|-----------|-------|
+| `PROFILE_DIR` | `~/.local/share/ai-ide/$AI_PROFILE` | the container home, persistent between runs |
+| `CONFIG_DIR` | `~/.config/ai-ide/$AI_PROFILE/$PRJ` | what you write: agent configs, `.env`, `.exports`, `mcp.json` |
+| `CACHE_DIR` | `~/.cache/ai-ide/$AI_PROFILE/$PRJ` | what the launcher generates |
+
+### What is mounted where
+
+| Host | Container | Mode |
+|------|-----------|------|
+| `PROFILE_DIR` | `/home` | rw |
+| `~/.local/share/ai-ide/shared` (if it exists) | `/home/shared` | rw |
+| `$PWD` — the project | `/home/src` (working directory) | rw |
+| `CONFIG_DIR/<any-other-file>` | `/home/<same-relative-path>` | ro |
+| `CONFIG_DIR/mcp.json` | `/home/.mcp.json`, `/home/.cursor/mcp.json`, `/home/.agents/mcp_config.json`, `/home/.gemini/config/mcp_config.json` | ro |
+| `CACHE_DIR/managed_config.toml` — generated from `mcp.json` and `CONFIG_DIR/config.toml` | `/etc/codex/managed_config.toml` | ro |
+| every skill from `AGENT_SKILLS` | `/home/.agents/skills/<name>`, `/home/.claude/skills/<name>`, `/home/.cursor/skills/<name>`, `/home/.gemini/skills/<name>`, `/home/.gemini/antigravity-cli/skills/<name>` | ro |
+| X11 socket and dbus (Linux) `/tmp/.X11-unix`, `/run/dbus`, `/run/user/$UID/bus` | same paths | rw |
+| X11 cookie (macOS) `/tmp/.docker.xauth.$$` | `/root/.Xauthority` | rw |
+
+Not mounted at all:
+
+| Host | Why |
+|------|-----|
+| `CONFIG_DIR/.env` | sourced by the launcher itself, on the host |
+| `CONFIG_DIR/.exports` | turned into `docker run -e` arguments |
+| `CONFIG_DIR/config.toml` | used as the base of the generated codex config |
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_PROFILE` | Profile name (required) | None |
+| `AGENT_SKILLS` | List of skills mounted read-only, separated by colons, spaces or newlines | None |
+| `AGENT_SKILLS_TARGETS` | Skill directories inside the container (relative to `/home`) | `.agents/skills .claude/skills .cursor/skills .gemini/skills .gemini/antigravity-cli/skills` |
+| `AGENT_MCP_TARGETS` | Paths `mcp.json` is mounted to (relative to `/home`) | `.mcp.json .cursor/mcp.json .agents/mcp_config.json .gemini/config/mcp_config.json` |
 | `DISPLAY` | X11 display | Current display |
 | `APPURL` | Cursor download URL | Latest stable |
+
+### Per-project configuration
+
+Files in `~/.config/ai-ide/$AI_PROFILE/$(basename $PWD)/` are mounted read-only
+into the container home, keeping project specific agent configs outside of the
+repository.
+
+The `.env` file in that directory is special: it is *sourced by the launcher*
+(plain shell syntax) before the container is started, so it can set any variable
+this script understands, for example `AGENT_SKILLS` or `AI_USE_PROXY`:
+
+```bash
+# ~/.config/ai-ide/my-project/ai-ide/.env
+AGENT_SKILLS="$HOME/skills:$HOME/work/pdf-report"
+AI_USE_PROXY=1
+```
+
+It is neither mounted into the container nor passed to it as environment
+variables — earlier versions turned every line of `.env` into a `docker run -e`
+argument, that job now belongs to `.exports`:
+
+```bash
+# ~/.config/ai-ide/my-project/ai-ide/.exports
+# NAME=value sets the variable inside the container
+ANTHROPIC_API_KEY=sk-ant-...
+# a bare NAME forwards the value from the host environment
+SSH_AUTH_SOCK
+```
+
+Empty lines and lines starting with `#` are ignored.
+
+### MCP servers
+
+`mcp.json` in the same directory describes the MCP servers once, in the usual
+`{"mcpServers": {...}}` format, and is mounted read-only under every name the
+agents look for:
+
+| Agent | Path | Content |
+|-------|------|---------|
+| Claude Code | `/home/.mcp.json` | `mcp.json` as is |
+| Cursor | `/home/.cursor/mcp.json` | `mcp.json` as is |
+| Antigravity (`agy`) | `/home/.gemini/config/mcp_config.json` | `mcp.json` as is |
+| — | `/home/.agents/mcp_config.json` | `mcp.json` as is |
+| Codex | `/etc/codex/managed_config.toml` | generated |
+
+Codex is the only one that needs a conversion: it reads TOML, so
+`managed_config.toml` with the `[mcp_servers.*]` tables is generated into
+`CACHE_DIR` and mounted read-only. If `CONFIG_DIR/config.toml` exists, it is used
+as the base and the tables are appended to it. The conversion runs on the host
+`python3` when available, otherwise inside the image.
+
+It goes to the managed config on purpose: `~/.codex/config.toml` has to stay
+writable, codex persists the directory trust into it and fails with
+`failed to persist config` when that file is a read-only mount.
+
+The target list can be changed with `AGENT_MCP_TARGETS` (space separated paths
+relative to `/home`).
+
+`.env`, `.exports`, `mcp.json` and `config.toml` are handled specially by the
+rules above; every other file of the directory is mounted read-only into the
+container home as is.
+
+### Skills
+
+`AGENT_SKILLS` is a list of skills to mount, and they may live in unrelated
+places. Entries are separated by colons, spaces or newlines, `~` and shell globs
+are expanded:
+
+```bash
+# individual skills from different projects
+AGENT_SKILLS="~/src/one/.agents/skills/jira-create-issue:~/src/two/skills/pdf-report"
+# same thing with globs and a whole directory of skills
+AGENT_SKILLS="~/src/one/.agents/skills/jira-* ~/src/two/skills"
+```
+
+An entry is a skill when it contains a `SKILL.md`; a directory of skills is
+expanded to every subdirectory that has one.
+
+Every skill is mounted read-only into the skill directory of each agent shipped
+in the image, so the same set of skills is available regardless of which agent is
+used:
+
+| Agent | Skill directory |
+|-------|-----------------|
+| Codex | `/home/.agents/skills/<skill-name>` |
+| Claude Code | `/home/.claude/skills/<skill-name>` |
+| Cursor | `/home/.cursor/skills/<skill-name>` |
+| Antigravity (`agy`), shared | `/home/.gemini/skills/<skill-name>` |
+| Antigravity (`agy`), global | `/home/.gemini/antigravity-cli/skills/<skill-name>` |
+
+Nothing is mounted into `/home/src`: the project directory stays as it is on the
+host. `agy` also reads `.agents/skills` of the workspace, but mounting there
+would litter the project with empty `.agents/skills/<skill-name>` directories,
+so its two home located roots are used instead — the ones its `/skills` command
+calls global and shared.
+
+The mounts are read-only, so agents can read the skills but cannot modify the
+originals. Skills whose names collide are skipped after the first one, and
+entries without a `SKILL.md` are ignored with a warning.
+
+When a new agent is added to the image, extend the target list with
+`AGENT_SKILLS_TARGETS` (space separated paths relative to `/home`) or change its
+default in `ai.ide`.
 
 ### Docker Build Arguments
 

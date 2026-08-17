@@ -37,7 +37,7 @@ run mv zed.app zed
 run ln -s /usr/local/zed/bin/zed /bin/zed
 
 run curl -LsSf https://astral.sh/uv/install.sh | sh
-run npm install -g @google/gemini-cli
+run curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
 run npm install -g @anthropic-ai/claude-code
 run npm install -g @openai/codex
 run npm install -g @zed-industries/codex-acp

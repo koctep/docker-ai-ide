@@ -32,7 +32,7 @@ run rm -f cursor.AppImage
 run ln -s /squashfs-root/usr/bin/cursor /bin/cursor
 
 workdir /usr/local
-run wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-x86_64.tar.gz) | tar zxv
+run wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zxv
 run mv zed.app zed
 run ln -s /usr/local/zed/bin/zed /bin/zed
 

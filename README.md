@@ -1,5 +1,13 @@
 # AI IDE Container Environment
 
+## Project Goal
+
+Create an environment for working safely with files using agentic systems. The
+environment guarantees that an agent can access only the files in the directory
+from which the agent application was launched, plus any additional files and
+directories explicitly authorized by the user. The rest of the host filesystem
+remains inaccessible to the agent.
+
 A containerized development environment that provides AI-powered code editors (Cursor and Zed) along with popular AI CLI tools in an isolated Docker container with GUI support.
 
 ## Features

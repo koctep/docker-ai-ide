@@ -28,26 +28,142 @@ if [ ! -z ${AI_USE_PROXY} ]; then
   OPTS="$OPTS -e ALL_PROXY=socks5h://${PROXY_IP}:5020"
 fi
 
+# Detect OS
+OS="$(uname -s)"
+case "${OS}" in
+  Linux*)
+    IS_LINUX=true
+    ;;
+  Darwin*)
+    IS_MACOS=true
+    ;;
+  *)
+    ;;
+esac
+
 # Build docker run command with proper environment variable handling
 DOCKER_CMD="docker run -it --rm"
-DOCKER_CMD="$DOCKER_CMD --device=/dev/dri"
 DOCKER_CMD="$DOCKER_CMD --cap-add SYS_ADMIN"
-DOCKER_CMD="$DOCKER_CMD --group-add $(getent group render | cut -d: -f3)"
-DOCKER_CMD="$DOCKER_CMD --group-add $(getent group video | cut -d: -f3)"
-[ -n "$(getent group audio)" ] && DOCKER_CMD="$DOCKER_CMD --group-add $(getent group audio | cut -d: -f3)"
-DOCKER_CMD="$DOCKER_CMD --device=/dev/snd"
+
+# macOS: add network mode for X11 access
+if [ "$IS_MACOS" = true ]; then
+  # Use host network access for X11 on macOS
+  DOCKER_CMD="$DOCKER_CMD --add-host=host.docker.internal:host-gateway"
+  # Disable X11 authorization for Docker connections
+  DOCKER_CMD="$DOCKER_CMD -e QT_X11_NO_MITSHM=1"
+  DOCKER_CMD="$DOCKER_CMD -e _X11_NO_MITSHM=1"
+  DOCKER_CMD="$DOCKER_CMD -e _MITSHM=0"
+  # macOS: use host.docker.internal for X11 (requires XQuartz)
+  # Check if XQuartz is running
+  if ! pgrep -x "Xquartz" > /dev/null; then
+    echo "Warning: XQuartz is not running. GUI applications may not work."
+    echo "Please start XQuartz and enable 'Allow connections from network clients' in Preferences > Security"
+  else
+    # Verify XQuartz is listening on port 6000
+    if ! lsof -i :6000 >/dev/null 2>&1; then
+      echo "Warning: XQuartz is running but not listening on port 6000."
+      echo "Make sure XQuartz was started with -listen tcp option"
+    fi
+  fi
+
+  # Get host IP for X11 connection
+  # XQuartz sets DISPLAY to a launchd unix socket (/private/tmp/.../org.xquartz:0)
+  # which does not exist inside the container; keep it for local xhost/xauth calls
+  # but treat it as unset so we fall back to host.docker.internal:0
+  HOST_DISPLAY=${DISPLAY:-:0}
+  case "$DISPLAY" in
+    /*) DISPLAY= ;;
+  esac
+
+  if [ -z "$DISPLAY" ]; then
+    # Use host.docker.internal for Docker Desktop on macOS (most reliable)
+    # Fallback to actual IP if needed
+    HOST_IP="host.docker.internal"
+    DISPLAY_VAR="${HOST_IP}:0"
+
+    # Allow X11 connections from Docker
+    # Find xhost (usually in /opt/X11/bin on macOS)
+    XHOST_CMD=$(command -v xhost 2>/dev/null)
+    [ -z "$XHOST_CMD" ] && [ -x /opt/X11/bin/xhost ] && XHOST_CMD=/opt/X11/bin/xhost
+    if [ -n "$XHOST_CMD" ]; then
+      # Set DISPLAY for xhost (needed on macOS)
+      export DISPLAY="$HOST_DISPLAY"
+      # Allow all connections (for Docker, this is acceptable since it's local)
+      # More secure: xhost +localhost +host.docker.internal
+      "$XHOST_CMD" + >/dev/null 2>&1 || {
+        # If that fails, try specific hosts
+        "$XHOST_CMD" +localhost >/dev/null 2>&1
+        "$XHOST_CMD" +host.docker.internal >/dev/null 2>&1 || true
+        # Get actual IP and allow it too
+        ACTUAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
+        [ -n "$ACTUAL_IP" ] && "$XHOST_CMD" +"$ACTUAL_IP" >/dev/null 2>&1 || true
+        # Allow Docker network range
+        "$XHOST_CMD" +172.16.0.0/12 >/dev/null 2>&1 || true
+      }
+    fi
+
+    # Also try to copy X11 auth cookie (more secure, but xhost should be enough)
+    XAUTH_CMD=$(command -v xauth 2>/dev/null)
+    [ -z "$XAUTH_CMD" ] && [ -x /opt/X11/bin/xauth ] && XAUTH_CMD=/opt/X11/bin/xauth
+    if [ -f "$HOME/.Xauthority" ] && [ -n "$XAUTH_CMD" ]; then
+      XAUTH_FILE="/tmp/.docker.xauth.$$"
+      touch "$XAUTH_FILE"
+      chmod 600 "$XAUTH_FILE"
+      # Try to extract auth for current display or :0
+      CURRENT_DISPLAY=$HOST_DISPLAY
+      "$XAUTH_CMD" -f "$HOME/.Xauthority" nlist "$CURRENT_DISPLAY" 2>/dev/null | sed -e 's/^..../ffff/' | "$XAUTH_CMD" -f "$XAUTH_FILE" nmerge - 2>/dev/null || {
+        # Try with host.docker.internal
+        "$XAUTH_CMD" -f "$HOME/.Xauthority" nlist "$CURRENT_DISPLAY" 2>/dev/null | sed -e "s/^..../ffff/" -e "s/unix:.*/inet host.docker.internal/" | "$XAUTH_CMD" -f "$XAUTH_FILE" nmerge - 2>/dev/null || true
+      }
+      if [ -s "$XAUTH_FILE" ]; then
+        DOCKER_CMD="$DOCKER_CMD -v ${XAUTH_FILE}:/root/.Xauthority"
+        DOCKER_CMD="$DOCKER_CMD -e XAUTHORITY=/root/.Xauthority"
+      else
+        rm -f "$XAUTH_FILE"
+      fi
+    fi
+  else
+    DISPLAY_VAR=${DISPLAY}
+  fi
+  DBUS_ADDR="unix:path=/tmp/dbus-session"
+fi
+
+# Linux-specific device and group settings
+if [ "$IS_LINUX" = true ]; then
+  # Add graphics device (Linux only)
+  [ -d /dev/dri ] && DOCKER_CMD="$DOCKER_CMD --device=/dev/dri"
+
+  # Add group IDs (Linux only)
+  if command -v getent >/dev/null 2>&1; then
+    RENDER_GID=$(getent group render | cut -d: -f3)
+    [ -n "$RENDER_GID" ] && DOCKER_CMD="$DOCKER_CMD --group-add $RENDER_GID"
+
+    VIDEO_GID=$(getent group video | cut -d: -f3)
+    [ -n "$VIDEO_GID" ] && DOCKER_CMD="$DOCKER_CMD --group-add $VIDEO_GID"
+
+    AUDIO_GID=$(getent group audio | cut -d: -f3)
+    [ -n "$AUDIO_GID" ] && DOCKER_CMD="$DOCKER_CMD --group-add $AUDIO_GID"
+  fi
+
+  # Add audio device (Linux only)
+  [ -d /dev/snd ] && DOCKER_CMD="$DOCKER_CMD --device=/dev/snd"
+  # Linux: use Unix socket for X11
+  DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
+  DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
+  DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
+  DISPLAY_VAR=${DISPLAY:-:0}
+  DBUS_ADDR="unix:path=/run/user/$UID/bus"
+fi
 DOCKER_CMD="$DOCKER_CMD -u $UID:44"
-DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
-DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
-DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
+
 DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
 [ -d ${SHARED_DIR} ] && DOCKER_CMD="$DOCKER_CMD -v ${SHARED_DIR}:/home/shared"
 DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
 DOCKER_CMD="$DOCKER_CMD -w /home/src"
-DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY}"
+DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
 DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
-DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID/bus"
+DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=${DBUS_ADDR}"
 CONFIG_DIR=$HOME/.config/ai-ide/$AI_PROFILE/$PRJ
 echo "mounting config files from '$CONFIG_DIR'" >&2
 [ -d $CONFIG_DIR ] && \

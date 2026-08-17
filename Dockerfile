@@ -36,7 +36,6 @@ run wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-x86_64
 run mv zed.app zed
 run ln -s /usr/local/zed/bin/zed /bin/zed
 
-run curl -LsSf https://astral.sh/uv/install.sh | sh
 run curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
 run npm install -g @anthropic-ai/claude-code
 run npm install -g @openai/codex

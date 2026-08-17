@@ -2,6 +2,7 @@ from debian:stable
 
 arg USERNAME
 arg USERID
+arg ARCH
 
 run apt update
 run apt install -y wget curl iputils-ping iproute2 ripgrep \
@@ -19,12 +20,12 @@ run echo 'deb [trusted=true] http://apt.langed.org ./' > /etc/apt/sources.list.d
 run apt update
 run apt install -y aii-config-screen aii-config-vim aii-config-bash aii-config-less
 
-run wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64"
+run wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-$ARCH"
 run dpkg -i vscode.deb
 run rm -f vscode.deb /etc/apt/sources.list.d/vscode.sources
 run apt install -f -y
 
-run wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-x64/cursor/
+run wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-$ARCH/cursor/
 run chmod +x cursor.AppImage
 run ./cursor.AppImage --appimage-extract
 run rm -f cursor.AppImage

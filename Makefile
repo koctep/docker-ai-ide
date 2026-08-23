@@ -17,14 +17,20 @@ ifeq ($(CURSOR_CLI_VERSION),)
 $(error failed to detect Cursor CLI version from https://cursor.com/install)
 endif
 
+NOX ?= false
+
 build: force
 	docker build . \
 		--no-cache \
 		--build-arg USERID=$(shell id -u) \
 		--build-arg USERNAME=$(shell id -u -n) \
 		--build-arg ARCH=$(ARCH) \
+		--build-arg NOX=$(NOX) \
 		--build-arg CURSOR_CLI_VERSION=$(CURSOR_CLI_VERSION) \
 		-t ai-ide
+
+build-nox: force
+	$(MAKE) build NOX=true
 
 run: force
 	./cursor.ide bash

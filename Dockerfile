@@ -3,6 +3,7 @@ from debian:stable
 arg USERNAME
 arg USERID
 arg ARCH
+arg NOX=false
 
 run apt update \
  && apt install -y wget curl iputils-ping iproute2 ripgrep \
@@ -24,18 +25,22 @@ run wget -q http://apt.langed.org/67352D99.key -O /etc/apt/trusted.gpg.d/apt.lan
  && apt clean \
  && rm -rf /var/lib/apt/lists/*
 
-run wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-$ARCH" \
- && apt update \
- && (dpkg -i vscode.deb || apt install -f -y) \
- && rm -f vscode.deb /etc/apt/sources.list.d/vscode.sources \
- && apt clean \
- && rm -rf /var/lib/apt/lists/*
+run if [ "$NOX" != "true" ]; then \
+  wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-$ARCH" \
+  && apt update \
+  && (dpkg -i vscode.deb || apt install -f -y) \
+  && rm -f vscode.deb /etc/apt/sources.list.d/vscode.sources \
+  && apt clean \
+  && rm -rf /var/lib/apt/lists/*; \
+ fi
 
-run wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-$ARCH/cursor/ \
- && chmod +x cursor.AppImage \
- && ./cursor.AppImage --appimage-extract \
- && rm -f cursor.AppImage \
- && ln -s /squashfs-root/usr/bin/cursor /bin/cursor
+run if [ "$NOX" != "true" ]; then \
+  wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-$ARCH/cursor/ \
+  && chmod +x cursor.AppImage \
+  && ./cursor.AppImage --appimage-extract \
+  && rm -f cursor.AppImage \
+  && ln -s /squashfs-root/usr/bin/cursor /bin/cursor; \
+ fi
 
 arg CURSOR_CLI_VERSION
 run mkdir -p /usr/local/cursor-agent \
@@ -45,9 +50,11 @@ run mkdir -p /usr/local/cursor-agent \
  && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
 
 workdir /usr/local
-run wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zx \
- && mv zed.app zed \
- && ln -s /usr/local/zed/bin/zed /bin/zed
+run if [ "$NOX" != "true" ]; then \
+  wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zx \
+  && mv zed.app zed \
+  && ln -s /usr/local/zed/bin/zed /bin/zed; \
+ fi
 
 run curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
  && rm -rf /root/.cache/antigravity

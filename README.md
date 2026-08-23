@@ -57,6 +57,24 @@ A containerized development environment that provides AI-powered code editors (C
 
 ### Building the Container
 
+Full build with GUI editors (VSCode, Cursor, Zed):
+
+```bash
+make build
+```
+
+CLI-only build without GUI editors (Chromium and all CLI tools are still installed):
+
+```bash
+make build-nox
+# or
+make build NOX=true
+```
+
+Skipped in `NOX=true` mode: VSCode, Cursor AppImage, Zed.
+
+Always installed: Chromium, Cursor Agent CLI (`agent`), Antigravity (`agy`), Claude Code, Codex, and ACP adapters.
+
 The default build downloads Cursor 1.6.27. To use a different version:
 
 ```bash

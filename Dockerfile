@@ -37,6 +37,13 @@ run wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux
  && rm -f cursor.AppImage \
  && ln -s /squashfs-root/usr/bin/cursor /bin/cursor
 
+arg CURSOR_CLI_VERSION
+run mkdir -p /usr/local/cursor-agent \
+ && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
+  | tar --strip-components=1 -xz -C /usr/local/cursor-agent \
+ && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/agent \
+ && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
+
 workdir /usr/local
 run wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zx \
  && mv zed.app zed \

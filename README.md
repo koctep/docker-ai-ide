@@ -13,7 +13,7 @@ A containerized development environment that provides AI-powered code editors (C
 ## Features
 
 - **Multiple AI Editors**: Pre-configured Cursor and Zed editors
-- **AI CLI Tools**: Integrated Google Antigravity (`agy`), Anthropic Claude, and OpenAI Codex command-line interfaces
+- **AI CLI Tools**: Integrated Cursor Agent (`agent`), Google Antigravity (`agy`), Anthropic Claude, and OpenAI Codex command-line interfaces
 - **GUI Support**: Full X11 forwarding for native desktop experience
 - **Profile Management**: Isolated development environments using profiles
 - **Hardware Acceleration**: GPU and video device access for optimal performance
@@ -91,6 +91,9 @@ Profile data is stored in `~/.local/share/ai-ide/${AI_PROFILE}/` and includes:
 The container includes these AI command-line interfaces:
 
 ```bash
+# Cursor Agent CLI
+agent "Your prompt here"
+
 # Google Antigravity
 agy "Your prompt here"
 

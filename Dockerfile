@@ -21,7 +21,7 @@ run dpkg-reconfigure locales
 run wget -q http://apt.langed.org/67352D99.key -O /etc/apt/trusted.gpg.d/apt.langed.org.asc \
  && echo 'deb [trusted=true] http://apt.langed.org ./' > /etc/apt/sources.list.d/aii.list \
  && apt update \
- && apt install -y aii-config-screen aii-config-vim aii-config-bash aii-config-less \
+ && apt install -y aii-config-screen aii-config-vim aii-config-bash aii-config-less aii-config-git \
  && apt clean \
  && rm -rf /var/lib/apt/lists/*
 

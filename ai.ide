@@ -364,7 +364,7 @@ if [ ! -z "${AGENT_SKILLS}" ]; then
   IFS=$OLD_IFS
 fi
 
-echo "running $DOCKER_CMD" >&2
+[ ! -z "${DEBUG}" ] && echo "running $DOCKER_CMD" >&2
 
 # Add git environment variables if they exist
 [ ! -z "${GIT_AUTHOR_NAME}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_AUTHOR_NAME=\"${GIT_AUTHOR_NAME}\""

@@ -24,6 +24,11 @@ mkdir -p $PROFILE_DIR/src
 SHARED_DIR=${HOME}/.local/share/ai-ide/shared
 CONFIG_DIR=$HOME/.config/ai-ide/$AI_PROFILE/$PRJ
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/ai-ide/$AI_PROFILE/$PRJ
+# Per-session /tmp on the host so agent scratch stays off the container overlay
+TMP_HOST=${HOME}/.local/share/ai-ide/tmp/$$
+mkdir -p $TMP_HOST
+chmod 700 $TMP_HOST
+trap 'rm -rf "$TMP_HOST"' EXIT
 
 # Launcher configuration. The file is sourced by this script only, it is neither
 # mounted into the container nor passed to it as environment variables.
@@ -158,10 +163,10 @@ if [ "$IS_LINUX" = true ]; then
 
   # Add audio device (Linux only)
   [ -d /dev/snd ] && DOCKER_CMD="$DOCKER_CMD --device=/dev/snd"
-  # Linux: use Unix socket for X11
+  # Linux: use Unix socket for X11. /tmp/.X11-unix is mounted after the
+  # session /tmp bind below, otherwise that bind would hide the socket.
   DOCKER_CMD="$DOCKER_CMD -v /run/user/$UID/bus:/run/user/$UID/bus"
   DOCKER_CMD="$DOCKER_CMD -v /run/dbus:/run/dbus"
-  DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
   DISPLAY_VAR=${DISPLAY:-:0}
   DBUS_ADDR="unix:path=/run/user/$UID/bus"
 fi
@@ -169,10 +174,13 @@ DOCKER_CMD="$DOCKER_CMD -u $UID:44"
 
 DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
 [ -d ${SHARED_DIR} ] && DOCKER_CMD="$DOCKER_CMD -v ${SHARED_DIR}:/home/shared"
+DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/tmp"
+[ "$IS_LINUX" = true ] && DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
 DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
 DOCKER_CMD="$DOCKER_CMD -w /home/src"
 DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
+DOCKER_CMD="$DOCKER_CMD -e TMPDIR=/tmp"
 DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
 DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=${DBUS_ADDR}"
 echo "mounting config files from '$CONFIG_DIR'" >&2

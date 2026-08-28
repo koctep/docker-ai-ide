@@ -130,7 +130,8 @@ codex "Your coding request"
 │   ├── .claude/             # Agent state and configuration
 │   ├── .codex/              # ... one directory per agent
 │   └── ...                  # Other user data
-└── shared/                  # Optional, mounted as /home/shared
+├── shared/                  # Optional, mounted as /home/shared
+└── tmp/<pid>/               # Per-session /tmp, deleted when the launcher exits
 ```
 
 ## Configuration
@@ -150,6 +151,7 @@ and the project directory name (`PRJ` below is `$(basename $PWD)`):
 |------|-----------|------|
 | `PROFILE_DIR` | `/home` | rw |
 | `~/.local/share/ai-ide/shared` (if it exists) | `/home/shared` | rw |
+| `~/.local/share/ai-ide/tmp/<pid>` — launcher PID, removed on exit | `/tmp` | rw |
 | `$PWD` — the project | `/home/src` (working directory) | rw |
 | `CONFIG_DIR/<any-other-file>` | `/home/<same-relative-path>` | ro |
 | `CONFIG_DIR/mcp.json` | `/home/.mcp.json`, `/home/.cursor/mcp.json`, `/home/.agents/mcp_config.json`, `/home/.gemini/config/mcp_config.json` | ro |

@@ -10,7 +10,7 @@ run apt update \
                   libglib2.0-0 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
                   libcups2 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 \
                   strace mc xdg-utils git sudo chromium tzdata \
-                  python3-venv npm \
+                  python3-venv npm openssh-server \
                   mesa-vulkan-drivers mesa-utils locales \
  && apt upgrade -y \
  && apt clean \
@@ -65,5 +65,7 @@ run npm install -g @anthropic-ai/claude-code \
  && npm cache clean --force \
  && rm -rf /root/.npm /tmp/*
 
+copy sshd/ai-ide.conf /etc/ssh/sshd_config.d/ai-ide.conf
+
 run chown -R $USERID /home
-run useradd -u $USERID $USERNAME
+run useradd -M -d /home -s /bin/bash -u $USERID -g 44 $USERNAME

@@ -1,6 +1,41 @@
- #!/bin/bash
+#!/bin/bash
 
-case $(basename $_ .ide) in
+LAUNCHER=$0
+CLI_SSH=
+CLI_SSH_PORT=
+CLI_SSH_BIND=
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ssh)
+      CLI_SSH=1
+      shift
+      ;;
+    --ssh-port)
+      CLI_SSH_PORT=$2
+      shift 2
+      ;;
+    --ssh-bind)
+      CLI_SSH_BIND=$2
+      shift 2
+      ;;
+    --)
+      shift
+      while [ $# -gt 0 ]; do
+        POSITIONAL+=("$1")
+        shift
+      done
+      break
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
+case $(basename "$LAUNCHER" .ide) in
   zed)
     CMD='zed --foreground .'
     ;;
@@ -39,6 +74,33 @@ else
   echo "no env file in $CONFIG_DIR" >&2
 fi
 
+[ -n "$CLI_SSH" ] && AI_SSH=1
+[ -n "$CLI_SSH_PORT" ] && AI_SSH_PORT=$CLI_SSH_PORT
+[ -n "$CLI_SSH_BIND" ] && AI_SSH_BIND=$CLI_SSH_BIND
+AI_SSH_PORT=${AI_SSH_PORT:-2222}
+AI_SSH_BIND=${AI_SSH_BIND:-127.0.0.1}
+
+if [ ! -z "${AI_SSH}" ]; then
+  if [ ! -d "$PROFILE_DIR/.ssh" ]; then
+    if [ ! -f "$HOME/.ssh/id_rsa.pub" ]; then
+      echo "missing $HOME/.ssh/id_rsa.pub; cannot create $PROFILE_DIR/.ssh/authorized_keys" >&2
+      exit 1
+    fi
+    mkdir -p "$PROFILE_DIR/.ssh"
+    chmod 700 "$PROFILE_DIR/.ssh"
+    cp "$HOME/.ssh/id_rsa.pub" "$PROFILE_DIR/.ssh/authorized_keys"
+    chmod 600 "$PROFILE_DIR/.ssh/authorized_keys"
+    echo "created $PROFILE_DIR/.ssh/authorized_keys from $HOME/.ssh/id_rsa.pub" >&2
+  fi
+  if [ ! -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" ]; then
+    ssh-keygen -t ed25519 -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" -N '' -q
+    chmod 600 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key"
+    [ -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub" ] && chmod 644 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub"
+    echo "created SSH host key $PROFILE_DIR/.ssh/ssh_host_ed25519_key" >&2
+  fi
+  RUNCMD='/usr/sbin/sshd -D -e'
+fi
+
 if [ ! -z ${AI_USE_PROXY} ]; then
   PROXY_IP=$(ip route get 8.8.8.8 | head -n 1 | awk '{print $7}')
   OPTS="$OPTS -e ALL_PROXY=socks5h://${PROXY_IP}:5020"
@@ -58,7 +120,11 @@ case "${OS}" in
 esac
 
 # Build docker run command with proper environment variable handling
-DOCKER_CMD="docker run -it --rm"
+if [ ! -z "${AI_SSH}" ]; then
+  DOCKER_CMD="docker run --rm --init"
+else
+  DOCKER_CMD="docker run -it --rm"
+fi
 DOCKER_CMD="$DOCKER_CMD --cap-add SYS_ADMIN"
 
 # macOS: add network mode for X11 access
@@ -170,9 +236,14 @@ if [ "$IS_LINUX" = true ]; then
   DISPLAY_VAR=${DISPLAY:-:0}
   DBUS_ADDR="unix:path=/run/user/$UID/bus"
 fi
-DOCKER_CMD="$DOCKER_CMD -u $UID:44"
+if [ -z "${AI_SSH}" ]; then
+  DOCKER_CMD="$DOCKER_CMD -u $UID:44"
+else
+  DOCKER_CMD="$DOCKER_CMD -p ${AI_SSH_BIND}:${AI_SSH_PORT}:22"
+fi
 
 DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
+[ -d "$PROFILE_DIR/.ssh" ] && DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}/.ssh:/home/.ssh:ro"
 [ -d ${SHARED_DIR} ] && DOCKER_CMD="$DOCKER_CMD -v ${SHARED_DIR}:/home/shared"
 DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/tmp"
 DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/var/tmp"
@@ -371,6 +442,31 @@ if [ ! -z "${AGENT_SKILLS}" ]; then
     done
   done
   IFS=$OLD_IFS
+fi
+
+if [ ! -z "${AI_SSH}" ]; then
+  mkdir -p "$CACHE_DIR/ssh"
+  SSH_USER=$(id -un)
+  SSH_HOSTNAME=$AI_SSH_BIND
+  [ "$AI_SSH_BIND" = "0.0.0.0" ] && SSH_HOSTNAME=127.0.0.1
+  SSH_HOST_ALIAS="ai-ide-${AI_PROFILE}"
+  cat > "$CACHE_DIR/ssh/config" <<EOF
+Host ${SSH_HOST_ALIAS}
+  HostName ${SSH_HOSTNAME}
+  Port ${AI_SSH_PORT}
+  User ${SSH_USER}
+  IdentityFile ~/.ssh/id_rsa
+  ForwardAgent yes
+  StrictHostKeyChecking accept-new
+EOF
+  echo "SSH server listening on ${AI_SSH_BIND}:${AI_SSH_PORT}" >&2
+  echo "User: ${SSH_USER}" >&2
+  echo "IdentityFile: ~/.ssh/id_rsa" >&2
+  echo "Open folder: /home/src" >&2
+  echo "Host config written to $CACHE_DIR/ssh/config" >&2
+  echo "Add to ~/.ssh/config:" >&2
+  echo "  Include $CACHE_DIR/ssh/config" >&2
+  echo "Then: ssh ${SSH_HOST_ALIAS}" >&2
 fi
 
 [ ! -z "${DEBUG}" ] && echo "running $DOCKER_CMD" >&2

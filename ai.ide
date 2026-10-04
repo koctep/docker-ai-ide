@@ -59,11 +59,13 @@ mkdir -p $PROFILE_DIR/src
 SHARED_DIR=${HOME}/.local/share/ai-ide/shared
 CONFIG_DIR=$HOME/.config/ai-ide/$AI_PROFILE/$PRJ
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/ai-ide/$AI_PROFILE/$PRJ
-# Per-session /tmp on the host so agent scratch stays off the container overlay
-TMP_HOST=${HOME}/.local/share/ai-ide/tmp/$$
-mkdir -p $TMP_HOST
-chmod 700 $TMP_HOST
-trap 'rm -rf "$TMP_HOST"' EXIT
+HOST_PID=$$
+HOME_VOLUME=
+TMP_VOLUME=
+TMP_HOST=
+TMPDIR_VAR=/tmp
+HOME_DIRS=()
+HOME_FILES=()
 
 # Launcher configuration. The file is sourced by this script only, it is neither
 # mounted into the container nor passed to it as environment variables.
@@ -80,23 +82,139 @@ fi
 AI_SSH_PORT=${AI_SSH_PORT:-2222}
 AI_SSH_BIND=${AI_SSH_BIND:-127.0.0.1}
 
-if [ ! -z "${AI_SSH}" ]; then
-  if [ ! -d "$PROFILE_DIR/.ssh" ]; then
-    if [ ! -f "$HOME/.ssh/id_rsa.pub" ]; then
-      echo "missing $HOME/.ssh/id_rsa.pub; cannot create $PROFILE_DIR/.ssh/authorized_keys" >&2
-      exit 1
-    fi
-    mkdir -p "$PROFILE_DIR/.ssh"
-    chmod 700 "$PROFILE_DIR/.ssh"
-    cp "$HOME/.ssh/id_rsa.pub" "$PROFILE_DIR/.ssh/authorized_keys"
-    chmod 600 "$PROFILE_DIR/.ssh/authorized_keys"
-    echo "created $PROFILE_DIR/.ssh/authorized_keys from $HOME/.ssh/id_rsa.pub" >&2
+ensure_nfs_volume() {
+  local name=$1
+  local remote_path=$2
+  local vol=ai-ide-${name}
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
+    echo "using docker volume '$vol'" >&2
+    return
   fi
-  if [ ! -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" ]; then
-    ssh-keygen -t ed25519 -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" -N '' -q
-    chmod 600 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key"
-    [ -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub" ] && chmod 644 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub"
-    echo "created SSH host key $PROFILE_DIR/.ssh/ssh_host_ed25519_key" >&2
+  echo "creating docker volume '$vol' from ${AI_PROFILE_HOST}:${remote_path}" >&2
+  docker volume create \
+    --driver local \
+    --opt type=nfs \
+    --opt o="addr=${AI_PROFILE_HOST},${AI_PROFILE_NFS_OPTS}" \
+    --opt device=":${remote_path}" \
+    "$vol" >/dev/null || {
+    echo "failed to create docker volume '$vol'" >&2
+    exit 1
+  }
+}
+
+ensure_home_dir() {
+  local rel=$1
+  if [ -z "$rel" ] || [ "$rel" = "." ]; then
+    return
+  fi
+  if [ -n "$AI_PROFILE_HOST" ]; then
+    HOME_DIRS+=("/home/${rel}")
+  else
+    mkdir -p "$PROFILE_DIR/$rel"
+  fi
+}
+
+ensure_home_file() {
+  local rel=$1
+  [ -n "$rel" ] || return
+  ensure_home_dir "$(dirname "$rel")"
+  if [ -n "$AI_PROFILE_HOST" ]; then
+    HOME_FILES+=("/home/${rel}")
+  fi
+}
+
+flush_home_dirs() {
+  [ -n "$AI_PROFILE_HOST" ] || return 0
+  [ ${#HOME_DIRS[@]} -gt 0 ] || [ ${#HOME_FILES[@]} -gt 0 ] || return 0
+  docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide \
+    bash -c 'set -e
+      nd=$1; shift
+      dirs=()
+      i=0
+      while [ "$i" -lt "$nd" ]; do
+        dirs+=("$1"); shift
+        i=$((i+1))
+      done
+      if [ ${#dirs[@]} -gt 0 ]; then
+        mkdir -p "${dirs[@]}"
+      fi
+      if [ $# -gt 0 ]; then
+        touch "$@"
+      fi
+    ' _ "${#HOME_DIRS[@]}" "${HOME_DIRS[@]}" "${HOME_FILES[@]}" || exit 1
+  HOME_DIRS=()
+  HOME_FILES=()
+}
+
+cleanup_tmp() {
+  if [ -n "$TMP_VOLUME" ]; then
+    docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide rm -rf "/tmp/${HOST_PID}"
+  elif [ -n "$TMP_HOST" ]; then
+    rm -rf "$TMP_HOST"
+  fi
+}
+
+if [ -n "${AI_PROFILE_HOST}" ]; then
+  if [ -z "${AI_PROFILE_PATH}" ]; then
+    echo "AI_PROFILE_PATH is required when AI_PROFILE_HOST is set" >&2
+    exit 1
+  fi
+  AI_PROFILE_NFS_OPTS=${AI_PROFILE_NFS_OPTS:-rw,nfsvers=4}
+  HOME_VOLUME=ai-ide-${AI_PROFILE}
+  TMP_VOLUME=ai-ide-tmp
+  ensure_nfs_volume "$AI_PROFILE" "$AI_PROFILE_PATH"
+  ensure_nfs_volume tmp "${AI_PROFILE_PATH}/tmp"
+  docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide \
+    bash -c "mkdir -p '/tmp/${HOST_PID}' && chmod 700 '/tmp/${HOST_PID}'" || exit 1
+  TMPDIR_VAR=/tmp/${HOST_PID}
+  trap cleanup_tmp EXIT
+  # runc mkdir of nested binds runs as root; create them as the container user
+  ensure_home_dir src
+  [ -d "$SHARED_DIR" ] && ensure_home_dir shared
+else
+  # Per-session /tmp on the host so agent scratch stays off the container overlay
+  TMP_HOST=${HOME}/.local/share/ai-ide/tmp/${HOST_PID}
+  mkdir -p $TMP_HOST
+  chmod 700 $TMP_HOST
+  trap cleanup_tmp EXIT
+fi
+
+if [ ! -z "${AI_SSH}" ]; then
+  if [ -n "$AI_PROFILE_HOST" ]; then
+    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide test -d /home/.ssh; then
+      if [ ! -f "$HOME/.ssh/id_rsa.pub" ]; then
+        echo "missing $HOME/.ssh/id_rsa.pub; cannot create /home/.ssh/authorized_keys" >&2
+        exit 1
+      fi
+      docker run --rm -u "$UID:44" \
+        -v "${HOME_VOLUME}:/home" \
+        -v "$HOME/.ssh/id_rsa.pub:/id_rsa.pub:ro" \
+        ai-ide bash -c 'mkdir -p /home/.ssh && chmod 700 /home/.ssh && cp /id_rsa.pub /home/.ssh/authorized_keys && chmod 600 /home/.ssh/authorized_keys' || exit 1
+      echo "created /home/.ssh/authorized_keys from $HOME/.ssh/id_rsa.pub" >&2
+    fi
+    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide test -f /home/.ssh/ssh_host_ed25519_key; then
+      docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide bash -c \
+        'mkdir -p /home/.ssh && chmod 700 /home/.ssh && ssh-keygen -t ed25519 -f /home/.ssh/ssh_host_ed25519_key -N "" -q && chmod 600 /home/.ssh/ssh_host_ed25519_key; [ -f /home/.ssh/ssh_host_ed25519_key.pub ] && chmod 644 /home/.ssh/ssh_host_ed25519_key.pub; true' || exit 1
+      echo "created SSH host key /home/.ssh/ssh_host_ed25519_key" >&2
+    fi
+  else
+    if [ ! -d "$PROFILE_DIR/.ssh" ]; then
+      if [ ! -f "$HOME/.ssh/id_rsa.pub" ]; then
+        echo "missing $HOME/.ssh/id_rsa.pub; cannot create $PROFILE_DIR/.ssh/authorized_keys" >&2
+        exit 1
+      fi
+      mkdir -p "$PROFILE_DIR/.ssh"
+      chmod 700 "$PROFILE_DIR/.ssh"
+      cp "$HOME/.ssh/id_rsa.pub" "$PROFILE_DIR/.ssh/authorized_keys"
+      chmod 600 "$PROFILE_DIR/.ssh/authorized_keys"
+      echo "created $PROFILE_DIR/.ssh/authorized_keys from $HOME/.ssh/id_rsa.pub" >&2
+    fi
+    if [ ! -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" ]; then
+      ssh-keygen -t ed25519 -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key" -N '' -q
+      chmod 600 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key"
+      [ -f "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub" ] && chmod 644 "$PROFILE_DIR/.ssh/ssh_host_ed25519_key.pub"
+      echo "created SSH host key $PROFILE_DIR/.ssh/ssh_host_ed25519_key" >&2
+    fi
   fi
   RUNCMD='/usr/sbin/sshd -D -e'
 fi
@@ -242,17 +360,24 @@ else
   DOCKER_CMD="$DOCKER_CMD -p ${AI_SSH_BIND}:${AI_SSH_PORT}:22"
 fi
 
-DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
-[ -d "$PROFILE_DIR/.ssh" ] && DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}/.ssh:/home/.ssh:ro"
+if [ -n "$AI_PROFILE_HOST" ]; then
+  echo "mounting profile from volume '$HOME_VOLUME' (${AI_PROFILE_HOST}:${AI_PROFILE_PATH})" >&2
+  DOCKER_CMD="$DOCKER_CMD -v ${HOME_VOLUME}:/home"
+  DOCKER_CMD="$DOCKER_CMD -v ${TMP_VOLUME}:/tmp"
+  DOCKER_CMD="$DOCKER_CMD -v ${TMP_VOLUME}:/var/tmp"
+else
+  DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}:/home"
+  [ -d "$PROFILE_DIR/.ssh" ] && DOCKER_CMD="$DOCKER_CMD -v ${PROFILE_DIR}/.ssh:/home/.ssh:ro"
+  DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/tmp"
+  DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/var/tmp"
+fi
 [ -d ${SHARED_DIR} ] && DOCKER_CMD="$DOCKER_CMD -v ${SHARED_DIR}:/home/shared"
-DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/tmp"
-DOCKER_CMD="$DOCKER_CMD -v ${TMP_HOST}:/var/tmp"
 [ "$IS_LINUX" = true ] && DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
 DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
 DOCKER_CMD="$DOCKER_CMD -w /home/src"
 DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
-DOCKER_CMD="$DOCKER_CMD -e TMPDIR=/tmp"
+DOCKER_CMD="$DOCKER_CMD -e TMPDIR=${TMPDIR_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
 DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=${DBUS_ADDR}"
 echo "mounting config files from '$CONFIG_DIR'" >&2
@@ -260,7 +385,7 @@ echo "mounting config files from '$CONFIG_DIR'" >&2
 for f in $(cd $CONFIG_DIR && find . -type f | sed 's|^\./||' \
            | grep -vE '^(\.env|\.exports|mcp\.json|config\.toml)$'); do
   echo "  $f" >&2
-  mkdir -p $PROFILE_DIR/$(dirname $f)
+  ensure_home_file "$f"
   DOCKER_CMD="$DOCKER_CMD -v $CONFIG_DIR/$f:/home/$f:ro"
 done
 
@@ -289,7 +414,7 @@ if [ -e $CONFIG_DIR/mcp.json ]; then
   echo "mounting mcp config from '$CONFIG_DIR/mcp.json'" >&2
   for target in $MCP_TARGETS; do
     echo "  /home/$target" >&2
-    mkdir -p $PROFILE_DIR/$(dirname $target)
+    ensure_home_file "$target"
     DOCKER_CMD="$DOCKER_CMD -v $CONFIG_DIR/mcp.json:/home/$target:ro"
   done
 
@@ -390,6 +515,7 @@ mount_skill() {
   MOUNTED_SKILLS="$MOUNTED_SKILLS $SKILL_NAME"
   echo "  $SKILL_NAME ($SKILL_SRC)${2:+ $2}" >&2
   for target in $SKILLS_TARGETS; do
+    ensure_home_dir "$target/$SKILL_NAME"
     DOCKER_CMD="$DOCKER_CMD -v \"$SKILL_SRC\":/home/$target/\"$SKILL_NAME\":ro"
   done
 }
@@ -401,7 +527,7 @@ if [ ! -z "${AGENT_SKILLS}" ]; then
     case $target in
       # /home/src is the project, not the profile
       src/*) mkdir -p ${PWD}/${target#src/} ;;
-      *) mkdir -p $PROFILE_DIR/$target ;;
+      *) ensure_home_dir "$target" ;;
     esac
   done
   OLD_IFS=$IFS
@@ -477,7 +603,14 @@ fi
 [ ! -z "${GIT_COMMITTER_NAME}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_COMMITTER_NAME=\"${GIT_COMMITTER_NAME}\""
 [ ! -z "${GIT_COMMITER_EMAIL}" ] && DOCKER_CMD="$DOCKER_CMD -e GIT_COMMITER_EMAIL=\"${GIT_COMMITER_EMAIL}\""
 
+if [ -n "$AI_PROFILE_HOST" ]; then
+  echo "preparing home mountpoints on volume '$HOME_VOLUME'" >&2
+fi
+flush_home_dirs
+
+echo "starting container" >&2
 # Execute the docker command
 eval "$DOCKER_CMD ai-ide ${RUNCMD}"
-
-exit 0
+status=$?
+[ $status -ne 0 ] && echo "container exited with status $status" >&2
+exit $status

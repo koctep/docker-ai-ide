@@ -95,10 +95,14 @@ Profiles create isolated environments for different projects:
 export AI_PROFILE="project-name"
 ```
 
-Profile data is stored in `~/.local/share/ai-ide/${AI_PROFILE}/` and includes:
+Profile data is stored in `~/.local/share/ai-ide/${AI_PROFILE}/` by default
+and includes:
 - Editor configurations
 - Project files
 - User settings
+
+To keep `/home` on an NFS server instead of a host bind, set `AI_PROFILE_HOST`
+and `AI_PROFILE_PATH` (see [Remote profile volumes](#remote-profile-volumes)).
 
 ## Usage
 
@@ -134,7 +138,8 @@ launcher creates it and writes `authorized_keys` from `~/.ssh/id_rsa.pub`.
 If that public key is missing, the launcher exits without starting sshd.
 A host key `ssh_host_ed25519_key` is generated in the profile `.ssh` if it
 is missing. Later starts leave an existing profile `authorized_keys` unchanged.
-`$PROFILE_DIR/.ssh` is then bind-mounted on `/home/.ssh` read-only.
+With a local profile, `$PROFILE_DIR/.ssh` is then bind-mounted on `/home/.ssh`
+read-only. With a remote profile, `.ssh` lives in the NFS volume at `/home/.ssh`.
 
 Connect as the container user (the username used at `make build`) with
 `~/.ssh/id_rsa`, then open `/home/src`. The launcher writes a Host block to
@@ -163,6 +168,8 @@ codex "Your coding request"
 
 ### File Structure
 
+Local profile (default, `AI_PROFILE_HOST` unset):
+
 ```
 ~/.local/share/ai-ide/
 ├── [profile-name]/          # Profile-specific data, mounted as /home
@@ -174,6 +181,12 @@ codex "Your coding request"
 └── tmp/<pid>/               # Per-session /tmp, deleted when the launcher exits
 ```
 
+Remote profile (`AI_PROFILE_HOST` set): Docker volumes `ai-ide-$AI_PROFILE`
+(`/home` ← `$AI_PROFILE_HOST:$AI_PROFILE_PATH`) and `ai-ide-tmp`
+(`/tmp` ← `$AI_PROFILE_HOST:$AI_PROFILE_PATH/tmp`). Session scratch is
+`/tmp/<launcher-pid>`; `TMPDIR` is that path. The pid directory is removed
+when the launcher exits; the volumes are kept.
+
 ## Configuration
 
 Three host directories are involved, all of them derived from the profile name
@@ -181,18 +194,18 @@ and the project directory name (`PRJ` below is `$(basename $PWD)`):
 
 | Shorthand | Host path | Holds |
 |-----------|-----------|-------|
-| `PROFILE_DIR` | `~/.local/share/ai-ide/$AI_PROFILE` | the container home, persistent between runs |
+| `PROFILE_DIR` | `~/.local/share/ai-ide/$AI_PROFILE` | the container home when `AI_PROFILE_HOST` is unset |
 | `CONFIG_DIR` | `~/.config/ai-ide/$AI_PROFILE/$PRJ` | what you write: agent configs, `.env`, `.exports`, `mcp.json` |
 | `CACHE_DIR` | `~/.cache/ai-ide/$AI_PROFILE/$PRJ` | what the launcher generates |
 
 ### What is mounted where
 
-| Host | Container | Mode |
-|------|-----------|------|
-| `PROFILE_DIR` | `/home` | rw |
-| `PROFILE_DIR/.ssh` (if it exists) | `/home/.ssh` | ro |
+| Host / volume | Container | Mode |
+|---------------|-----------|------|
+| `PROFILE_DIR` (local) or volume `ai-ide-$AI_PROFILE` (remote) | `/home` | rw |
+| `PROFILE_DIR/.ssh` (local, if it exists) | `/home/.ssh` | ro |
 | `~/.local/share/ai-ide/shared` (if it exists) | `/home/shared` | rw |
-| `~/.local/share/ai-ide/tmp/<pid>` — launcher PID, removed on exit | `/tmp` | rw |
+| `~/.local/share/ai-ide/tmp/<pid>` (local) or volume `ai-ide-tmp` (remote) | `/tmp`, `/var/tmp` | rw |
 | `$PWD` — the project | `/home/src` (working directory) | rw |
 | `CONFIG_DIR/<any-other-file>` | `/home/<same-relative-path>` | ro |
 | `CONFIG_DIR/mcp.json` | `/home/.mcp.json`, `/home/.cursor/mcp.json`, `/home/.agents/mcp_config.json`, `/home/.gemini/config/mcp_config.json` | ro |
@@ -200,6 +213,9 @@ and the project directory name (`PRJ` below is `$(basename $PWD)`):
 | every skill from `AGENT_SKILLS` | `/home/.agents/skills/<name>`, `/home/.claude/skills/<name>`, `/home/.cursor/skills/<name>`, `/home/.gemini/skills/<name>`, `/home/.gemini/antigravity-cli/skills/<name>` | ro |
 | X11 socket and dbus (Linux) `/tmp/.X11-unix`, `/run/dbus`, `/run/user/$UID/bus` | same paths | rw |
 | X11 cookie (macOS) `/tmp/.docker.xauth.$$` | `/root/.Xauthority` | rw |
+
+Local `/tmp` is the per-pid directory itself, so `TMPDIR=/tmp`. Remote `/tmp` is
+the tmp volume, so `TMPDIR=/tmp/<launcher-pid>`.
 
 Not mounted at all:
 
@@ -214,6 +230,9 @@ Not mounted at all:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_PROFILE` | Profile name (required) | None |
+| `AI_PROFILE_HOST` | NFS server hostname or IP for remote `/home` and `/tmp` | empty (local binds) |
+| `AI_PROFILE_PATH` | Absolute path on that server mounted as `/home`; required when `AI_PROFILE_HOST` is set | None |
+| `AI_PROFILE_NFS_OPTS` | Extra NFS mount options (appended after `addr=`) | `rw,nfsvers=4` |
 | `AI_SSH` | Non-empty value starts SSH server mode | None |
 | `AI_SSH_PORT` | Host port published to container port 22 | `2222` |
 | `AI_SSH_BIND` | Address to bind the published SSH port | `127.0.0.1` |
@@ -222,6 +241,46 @@ Not mounted at all:
 | `AGENT_MCP_TARGETS` | Paths `mcp.json` is mounted to (relative to `/home`) | `.mcp.json .cursor/mcp.json .agents/mcp_config.json .gemini/config/mcp_config.json` |
 | `DISPLAY` | X11 display | Current display |
 | `APPURL` | Cursor download URL | Latest stable |
+
+### Remote profile volumes
+
+When `AI_PROFILE_HOST` is empty, `/home` and `/tmp` are bind-mounted from the
+launching machine as before.
+
+When it is set, `AI_PROFILE_PATH` is required (the launcher does not invent a
+server path). The launcher inspects Docker volumes and creates them if they are
+missing:
+
+| Volume | NFS source | Container |
+|--------|------------|-----------|
+| `ai-ide-$AI_PROFILE` | `$AI_PROFILE_HOST:$AI_PROFILE_PATH` | `/home` |
+| `ai-ide-tmp` | `$AI_PROFILE_HOST:$AI_PROFILE_PATH/tmp` | `/tmp` and `/var/tmp` |
+
+Create options: driver `local`, type `nfs`,
+`o=addr=$AI_PROFILE_HOST,$AI_PROFILE_NFS_OPTS`, `device=:<path>`.
+An existing volume is reused as-is; Docker cannot change its driver options.
+To point a volume at a different host or path, remove it first
+(`docker volume rm ai-ide-$AI_PROFILE`).
+
+`TMPDIR` is `/tmp/<launcher-pid>` so session scratch does not collide. That
+subdirectory is created before `docker run` and deleted when the launcher
+exits. The `ai-ide-tmp` volume itself is not deleted.
+
+Nested `/home` bind targets (directories and files: `src`, `shared`, skill
+dirs, `mcp.json` destinations, config files) are created on the volume as
+the container user in one `docker run` (`mkdir -p` and `touch`) before the
+main run, so runc does not create them as root (which NFS `root_squash`
+would reject).
+
+These variables may be exported in the shell or set in `CONFIG_DIR/.env`
+(sourced before the container starts):
+
+```bash
+AI_PROFILE_HOST=nfs.example
+AI_PROFILE_PATH=/var/lib/ai-ide/default
+# optional:
+# AI_PROFILE_NFS_OPTS=rw,nfsvers=4
+```
 
 ### Per-project configuration
 

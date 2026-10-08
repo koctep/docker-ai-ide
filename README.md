@@ -232,6 +232,7 @@ Not mounted at all:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_PROFILE` | Profile name (required) | None |
+| `AI_IMAGE` | Docker image for the IDE container and the launcher's helper containers | `ai-ide` |
 | `AI_PROFILE_HOST` | NFS server hostname or IP for remote `/home` and `/tmp` | empty (local binds) |
 | `AI_PROFILE_PATH` | Remote root of profiles (like `~/.local/share/ai-ide`); `/home` is `$AI_PROFILE_PATH/$AI_PROFILE` | None |
 | `AI_PROFILE_NFS_OPTS` | Extra NFS mount options (appended after `addr=`) | `rw,nfsvers=4` |
@@ -299,6 +300,7 @@ this script understands, for example `AGENT_SKILLS` or `AI_USE_PROXY`:
 # ~/.config/ai-ide/my-project/ai-ide/.env
 AGENT_SKILLS="$HOME/skills:$HOME/work/pdf-report"
 AI_USE_PROXY=1
+AI_IMAGE=my-ai-ide
 ```
 
 It is neither mounted into the container nor passed to it as environment

@@ -87,6 +87,8 @@ fi
 [ -n "$CLI_SSH_BIND" ] && AI_SSH_BIND=$CLI_SSH_BIND
 AI_SSH_PORT=${AI_SSH_PORT:-2222}
 AI_SSH_BIND=${AI_SSH_BIND:-127.0.0.1}
+# Image for every docker run this launcher starts, including helper containers.
+AI_IMAGE=${AI_IMAGE:-ai-ide}
 
 ensure_nfs_volume() {
   local name=$1
@@ -132,7 +134,7 @@ ensure_home_file() {
 flush_home_dirs() {
   [ -n "$AI_PROFILE_HOST" ] || return 0
   [ ${#HOME_DIRS[@]} -gt 0 ] || [ ${#HOME_FILES[@]} -gt 0 ] || return 0
-  docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide \
+  docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" "$AI_IMAGE" \
     bash -c 'set -e
       nd=$1; shift
       dirs=()
@@ -154,7 +156,7 @@ flush_home_dirs() {
 
 cleanup_tmp() {
   if [ -n "$TMP_VOLUME" ]; then
-    docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide rm -rf "/tmp/${HOST_PID}"
+    docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" "$AI_IMAGE" rm -rf "/tmp/${HOST_PID}"
   elif [ -n "$TMP_HOST" ]; then
     rm -rf "$TMP_HOST"
   fi
@@ -192,7 +194,7 @@ if [ -n "${AI_PROFILE_HOST}" ]; then
   TMP_VOLUME=ai-ide-tmp
   ensure_nfs_volume "$AI_PROFILE" "${AI_PROFILE_PATH%/}/${AI_PROFILE}"
   ensure_nfs_volume tmp "${AI_PROFILE_PATH%/}/tmp"
-  docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide \
+  docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" "$AI_IMAGE" \
     bash -c "mkdir -p '/tmp/${HOST_PID}' && chmod 700 '/tmp/${HOST_PID}'" || exit 1
   TMPDIR_VAR=/tmp/${HOST_PID}
   trap cleanup EXIT
@@ -209,7 +211,7 @@ fi
 
 if [ ! -z "${AI_SSH}" ]; then
   if [ -n "$AI_PROFILE_HOST" ]; then
-    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide test -d /home/.ssh; then
+    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" "$AI_IMAGE" test -d /home/.ssh; then
       if [ ! -f "$HOME/.ssh/id_rsa.pub" ]; then
         echo "missing $HOME/.ssh/id_rsa.pub; cannot create /home/.ssh/authorized_keys" >&2
         exit 1
@@ -217,11 +219,11 @@ if [ ! -z "${AI_SSH}" ]; then
       docker run --rm -u "$UID:44" \
         -v "${HOME_VOLUME}:/home" \
         -v "$HOME/.ssh/id_rsa.pub:/id_rsa.pub:ro" \
-        ai-ide bash -c 'mkdir -p /home/.ssh && chmod 700 /home/.ssh && cp /id_rsa.pub /home/.ssh/authorized_keys && chmod 600 /home/.ssh/authorized_keys' || exit 1
+        "$AI_IMAGE" bash -c 'mkdir -p /home/.ssh && chmod 700 /home/.ssh && cp /id_rsa.pub /home/.ssh/authorized_keys && chmod 600 /home/.ssh/authorized_keys' || exit 1
       echo "created /home/.ssh/authorized_keys from $HOME/.ssh/id_rsa.pub" >&2
     fi
-    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide test -f /home/.ssh/ssh_host_ed25519_key; then
-      docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" ai-ide bash -c \
+    if ! docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" "$AI_IMAGE" test -f /home/.ssh/ssh_host_ed25519_key; then
+      docker run --rm -u "$UID:44" -v "${HOME_VOLUME}:/home" "$AI_IMAGE" bash -c \
         'mkdir -p /home/.ssh && chmod 700 /home/.ssh && ssh-keygen -t ed25519 -f /home/.ssh/ssh_host_ed25519_key -N "" -q && chmod 600 /home/.ssh/ssh_host_ed25519_key; [ -f /home/.ssh/ssh_host_ed25519_key.pub ] && chmod 644 /home/.ssh/ssh_host_ed25519_key.pub; true' || exit 1
       echo "created SSH host key /home/.ssh/ssh_host_ed25519_key" >&2
     fi
@@ -508,7 +510,7 @@ MCP2TOML
       python3 $CACHE_DIR/mcp2toml.py $CONFIG_DIR/mcp.json
     else
       # no python on the host, use the one from the image
-      docker run --rm -v "$CACHE_DIR":/cache:ro -v "$CONFIG_DIR":/config:ro ai-ide \
+      docker run --rm -v "$CACHE_DIR":/cache:ro -v "$CONFIG_DIR":/config:ro "$AI_IMAGE" \
         python3 /cache/mcp2toml.py /config/mcp.json
     fi
   } > $CACHE_DIR/managed_config.toml.tmp \
@@ -660,9 +662,9 @@ if [ -n "$AI_PROFILE_HOST" ]; then
 fi
 flush_home_dirs
 
-echo "starting container" >&2
+echo "starting container from '$AI_IMAGE'" >&2
 # Execute the docker command
-eval "$DOCKER_CMD ai-ide ${RUNCMD}"
+eval "$DOCKER_CMD \"${AI_IMAGE}\" ${RUNCMD}"
 status=$?
 [ $status -ne 0 ] && echo "container exited with status $status" >&2
 exit $status

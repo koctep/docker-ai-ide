@@ -162,8 +162,8 @@ if [ -n "${AI_PROFILE_HOST}" ]; then
   AI_PROFILE_NFS_OPTS=${AI_PROFILE_NFS_OPTS:-rw,nfsvers=4}
   HOME_VOLUME=ai-ide-${AI_PROFILE}
   TMP_VOLUME=ai-ide-tmp
-  ensure_nfs_volume "$AI_PROFILE" "$AI_PROFILE_PATH"
-  ensure_nfs_volume tmp "${AI_PROFILE_PATH}/tmp"
+  ensure_nfs_volume "$AI_PROFILE" "${AI_PROFILE_PATH%/}/${AI_PROFILE}"
+  ensure_nfs_volume tmp "${AI_PROFILE_PATH%/}/tmp"
   docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide \
     bash -c "mkdir -p '/tmp/${HOST_PID}' && chmod 700 '/tmp/${HOST_PID}'" || exit 1
   TMPDIR_VAR=/tmp/${HOST_PID}
@@ -361,7 +361,7 @@ else
 fi
 
 if [ -n "$AI_PROFILE_HOST" ]; then
-  echo "mounting profile from volume '$HOME_VOLUME' (${AI_PROFILE_HOST}:${AI_PROFILE_PATH})" >&2
+  echo "mounting profile from volume '$HOME_VOLUME' (${AI_PROFILE_HOST}:${AI_PROFILE_PATH%/}/${AI_PROFILE})" >&2
   DOCKER_CMD="$DOCKER_CMD -v ${HOME_VOLUME}:/home"
   DOCKER_CMD="$DOCKER_CMD -v ${TMP_VOLUME}:/tmp"
   DOCKER_CMD="$DOCKER_CMD -v ${TMP_VOLUME}:/var/tmp"

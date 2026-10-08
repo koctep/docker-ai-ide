@@ -182,7 +182,7 @@ Local profile (default, `AI_PROFILE_HOST` unset):
 ```
 
 Remote profile (`AI_PROFILE_HOST` set): Docker volumes `ai-ide-$AI_PROFILE`
-(`/home` ← `$AI_PROFILE_HOST:$AI_PROFILE_PATH`) and `ai-ide-tmp`
+(`/home` ← `$AI_PROFILE_HOST:$AI_PROFILE_PATH/$AI_PROFILE`) and `ai-ide-tmp`
 (`/tmp` ← `$AI_PROFILE_HOST:$AI_PROFILE_PATH/tmp`). Session scratch is
 `/tmp/<launcher-pid>`; `TMPDIR` is that path. The pid directory is removed
 when the launcher exits; the volumes are kept.
@@ -231,7 +231,7 @@ Not mounted at all:
 |----------|-------------|---------|
 | `AI_PROFILE` | Profile name (required) | None |
 | `AI_PROFILE_HOST` | NFS server hostname or IP for remote `/home` and `/tmp` | empty (local binds) |
-| `AI_PROFILE_PATH` | Absolute path on that server mounted as `/home`; required when `AI_PROFILE_HOST` is set | None |
+| `AI_PROFILE_PATH` | Remote root of profiles (like `~/.local/share/ai-ide`); `/home` is `$AI_PROFILE_PATH/$AI_PROFILE` | None |
 | `AI_PROFILE_NFS_OPTS` | Extra NFS mount options (appended after `addr=`) | `rw,nfsvers=4` |
 | `AI_SSH` | Non-empty value starts SSH server mode | None |
 | `AI_SSH_PORT` | Host port published to container port 22 | `2222` |
@@ -247,13 +247,14 @@ Not mounted at all:
 When `AI_PROFILE_HOST` is empty, `/home` and `/tmp` are bind-mounted from the
 launching machine as before.
 
-When it is set, `AI_PROFILE_PATH` is required (the launcher does not invent a
-server path). The launcher inspects Docker volumes and creates them if they are
-missing:
+When it is set, `AI_PROFILE_PATH` is required. It is the remote analogue of
+`~/.local/share/ai-ide`: `/home` is `$AI_PROFILE_PATH/$AI_PROFILE`, `/tmp`
+is `$AI_PROFILE_PATH/tmp`. The launcher inspects Docker volumes and creates
+them if they are missing:
 
 | Volume | NFS source | Container |
 |--------|------------|-----------|
-| `ai-ide-$AI_PROFILE` | `$AI_PROFILE_HOST:$AI_PROFILE_PATH` | `/home` |
+| `ai-ide-$AI_PROFILE` | `$AI_PROFILE_HOST:$AI_PROFILE_PATH/$AI_PROFILE` | `/home` |
 | `ai-ide-tmp` | `$AI_PROFILE_HOST:$AI_PROFILE_PATH/tmp` | `/tmp` and `/var/tmp` |
 
 Create options: driver `local`, type `nfs`,
@@ -277,7 +278,7 @@ These variables may be exported in the shell or set in `CONFIG_DIR/.env`
 
 ```bash
 AI_PROFILE_HOST=nfs.example
-AI_PROFILE_PATH=/var/lib/ai-ide/default
+AI_PROFILE_PATH=/var/lib/ai-ide
 # optional:
 # AI_PROFILE_NFS_OPTS=rw,nfsvers=4
 ```

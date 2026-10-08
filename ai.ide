@@ -66,6 +66,12 @@ TMP_HOST=
 TMPDIR_VAR=/tmp
 HOME_DIRS=()
 HOME_FILES=()
+# Development services of the project, started with docker compose. The project
+# name has to match [a-z0-9][a-z0-9_-]*, relative paths of the file resolve
+# against the project directory
+COMPOSE_FILE_PATH=$CONFIG_DIR/compose.yaml
+COMPOSE_PROJECT=$(echo "ai-ide-${AI_PROFILE}-${PRJ}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+COMPOSE_STARTED=
 
 # Launcher configuration. The file is sourced by this script only, it is neither
 # mounted into the container nor passed to it as environment variables.
@@ -154,6 +160,28 @@ cleanup_tmp() {
   fi
 }
 
+compose() {
+  docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE_PATH" \
+    --project-directory "$PWD" "$@"
+}
+
+# The services are shared by all sessions of the project, the last one to exit
+# takes them down. Our own container is already gone (--rm) when this runs.
+compose_down() {
+  [ -n "$COMPOSE_STARTED" ] || return 0
+  if [ -n "$(docker ps -q --filter "label=ai-ide.compose-project=${COMPOSE_PROJECT}")" ]; then
+    echo "compose project '$COMPOSE_PROJECT' is used by another session, leaving it running" >&2
+    return 0
+  fi
+  echo "stopping compose project '$COMPOSE_PROJECT'" >&2
+  compose down
+}
+
+cleanup() {
+  cleanup_tmp
+  compose_down
+}
+
 if [ -n "${AI_PROFILE_HOST}" ]; then
   if [ -z "${AI_PROFILE_PATH}" ]; then
     echo "AI_PROFILE_PATH is required when AI_PROFILE_HOST is set" >&2
@@ -167,7 +195,7 @@ if [ -n "${AI_PROFILE_HOST}" ]; then
   docker run --rm -u "$UID:44" -v "${TMP_VOLUME}:/tmp" ai-ide \
     bash -c "mkdir -p '/tmp/${HOST_PID}' && chmod 700 '/tmp/${HOST_PID}'" || exit 1
   TMPDIR_VAR=/tmp/${HOST_PID}
-  trap cleanup_tmp EXIT
+  trap cleanup EXIT
   # runc mkdir of nested binds runs as root; create them as the container user
   ensure_home_dir src
   [ -d "$SHARED_DIR" ] && ensure_home_dir shared
@@ -176,7 +204,7 @@ else
   TMP_HOST=${HOME}/.local/share/ai-ide/tmp/${HOST_PID}
   mkdir -p $TMP_HOST
   chmod 700 $TMP_HOST
-  trap cleanup_tmp EXIT
+  trap cleanup EXIT
 fi
 
 if [ ! -z "${AI_SSH}" ]; then
@@ -383,7 +411,7 @@ DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=${DBUS_ADDR}"
 echo "mounting config files from '$CONFIG_DIR'" >&2
 [ -d $CONFIG_DIR ] && \
 for f in $(cd $CONFIG_DIR && find . -type f | sed 's|^\./||' \
-           | grep -vE '^(\.env|\.exports|mcp\.json|config\.toml)$'); do
+           | grep -vE '^(\.env|\.exports|mcp\.json|config\.toml|compose\.yaml)$'); do
   echo "  $f" >&2
   ensure_home_file "$f"
   DOCKER_CMD="$DOCKER_CMD -v $CONFIG_DIR/$f:/home/$f:ro"
@@ -568,6 +596,30 @@ if [ ! -z "${AGENT_SKILLS}" ]; then
     done
   done
   IFS=$OLD_IFS
+fi
+
+# Development services. The container joins every network of the compose
+# project, so the services are reachable by their names
+if [ -e "$COMPOSE_FILE_PATH" ]; then
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "docker compose is not available, cannot start '$COMPOSE_FILE_PATH'" >&2
+    exit 1
+  fi
+  echo "starting compose services from '$COMPOSE_FILE_PATH' (project $COMPOSE_PROJECT)" >&2
+  COMPOSE_STARTED=1
+  if ! compose up -d --wait; then
+    echo "failed to start compose project '$COMPOSE_PROJECT'" >&2
+    exit 1
+  fi
+  for network in $(docker network ls \
+                     --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+                     --format '{{.Name}}'); do
+    echo "  joining network $network" >&2
+    DOCKER_CMD="$DOCKER_CMD --network $network"
+  done
+  DOCKER_CMD="$DOCKER_CMD --label ai-ide.compose-project=${COMPOSE_PROJECT}"
+else
+  echo "no compose.yaml in $CONFIG_DIR" >&2
 fi
 
 if [ ! -z "${AI_SSH}" ]; then

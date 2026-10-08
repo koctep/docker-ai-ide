@@ -17,6 +17,7 @@ A containerized development environment that provides AI-powered code editors (C
 - **GUI Support**: Full X11 forwarding for native desktop experience
 - **SSH server mode**: OpenSSH inside the container for Cursor, VS Code, and other Remote-SSH IDEs
 - **Profile Management**: Isolated development environments using profiles
+- **Development Services**: Per-project containers from `compose.yaml`, reachable from the IDE by service name
 - **Hardware Acceleration**: GPU and video device access for optimal performance
 - **Debian Base**: Stable Debian foundation with essential development tools
 
@@ -224,6 +225,7 @@ Not mounted at all:
 | `CONFIG_DIR/.env` | sourced by the launcher itself, on the host |
 | `CONFIG_DIR/.exports` | turned into `docker run -e` arguments |
 | `CONFIG_DIR/config.toml` | used as the base of the generated codex config |
+| `CONFIG_DIR/compose.yaml` | started with docker compose by the launcher, see [Development services](#development-services) |
 
 ### Environment Variables
 
@@ -340,9 +342,45 @@ writable, codex persists the directory trust into it and fails with
 The target list can be changed with `AGENT_MCP_TARGETS` (space separated paths
 relative to `/home`).
 
-`.env`, `.exports`, `mcp.json` and `config.toml` are handled specially by the
-rules above; every other file of the directory is mounted read-only into the
-container home as is.
+### Development services
+
+If `compose.yaml` exists in the same directory, the launcher starts the services
+it describes before the container. This is useful for databases, caches, and
+other services the project needs during development:
+
+```yaml
+# ~/.config/ai-ide/my-project/ai-ide/compose.yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 15
+```
+
+- The compose project name is `ai-ide-$AI_PROFILE-$PRJ`, lowercased, with
+  characters other than `a-z`, `0-9`, `_` and `-` replaced by `-`.
+- The project directory is `$PWD`, so relative paths in the file (`build: .`,
+  `./data:/data`) refer to the project sources, and compose reads variables for
+  interpolation from `$PWD/.env`. Variables from `CONFIG_DIR/.env` reach compose
+  only when they are `export`ed there.
+- The services are started with `docker compose up -d --wait`, so the container
+  starts only after every service with a healthcheck is healthy. If the start
+  fails, the launcher exits without starting the container.
+- The container joins every network of the compose project, so a service is
+  reachable by its name, for example `postgres:5432`. Joining more than one
+  network needs Docker Engine 25 or later.
+- Several sessions of the same project share the services. When a session
+  exits, the launcher runs `docker compose down` unless another session of the
+  project is still running; the sessions are recognized by the
+  `ai-ide.compose-project` container label.
+
+`.env`, `.exports`, `mcp.json`, `config.toml` and `compose.yaml` are handled
+specially by the rules above; every other file of the directory is mounted
+read-only into the container home as is.
 
 ### Skills
 

@@ -4,18 +4,31 @@ arg USERNAME
 arg USERID
 arg ARCH
 arg NOX=false
+arg AGENTS=all
+
+run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
+    if [ -n "$$agents" ]; then \
+      oldifs=$$IFS; IFS=','; set -f; set -- $$agents; set +f; IFS=$$oldifs; \
+      for a in "$$@"; do \
+        case "$$a" in \
+          all|cursor|agy|claude|codex|qwen) ;; \
+          *) echo "unknown agent: $$a" >&2; exit 1 ;; \
+        esac; \
+      done; \
+    fi
 
 run apt update \
  && apt install -y wget curl iputils-ping iproute2 ripgrep \
-                  libglib2.0-0 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
-                  libcups2 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 \
-                  strace mc xdg-utils git sudo chromium tzdata \
+                  strace mc git sudo tzdata \
                   python3-venv npm openssh-server \
-                  mesa-vulkan-drivers mesa-utils locales \
+                  locales \
  && apt upgrade -y \
  && apt clean \
  && rm -rf /var/lib/apt/lists/*
-run sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF8/' /etc/locale.gen
+run sed -i \
+      -e 's/^# \(en_US.UTF-8 UTF-8\)/\1/' \
+      -e 's/^# \(ru_RU.UTF-8 UTF-8\)/\1/' \
+      /etc/locale.gen
 run dpkg-reconfigure locales
 
 run wget -q http://apt.langed.org/67352D99.key -O /etc/apt/trusted.gpg.d/apt.langed.org.asc \
@@ -25,7 +38,17 @@ run wget -q http://apt.langed.org/67352D99.key -O /etc/apt/trusted.gpg.d/apt.lan
  && apt clean \
  && rm -rf /var/lib/apt/lists/*
 
-run if [ "$NOX" != "true" ]; then \
+run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
+  apt update \
+  && apt install -y libglib2.0-0 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
+                    libcups2 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 \
+                    xdg-utils chromium \
+                    mesa-vulkan-drivers mesa-utils \
+  && apt clean \
+  && rm -rf /var/lib/apt/lists/*; \
+ fi
+
+run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
   wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-$ARCH" \
   && apt update \
   && (dpkg -i vscode.deb || apt install -f -y) \
@@ -34,7 +57,7 @@ run if [ "$NOX" != "true" ]; then \
   && rm -rf /var/lib/apt/lists/*; \
  fi
 
-run if [ "$NOX" != "true" ]; then \
+run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
   wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-$ARCH/cursor/ \
   && chmod +x cursor.AppImage \
   && ./cursor.AppImage --appimage-extract \
@@ -43,37 +66,56 @@ run if [ "$NOX" != "true" ]; then \
  fi
 
 arg CURSOR_CLI_VERSION
-run mkdir -p /usr/local/cursor-agent \
- && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
-  | tar --strip-components=1 -xz -C /usr/local/cursor-agent \
- && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/agent \
- && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
+run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
+    case ",$$agents," in \
+      *,all,*|*,cursor,*) \
+        if [ -z "$CURSOR_CLI_VERSION" ]; then \
+          echo "CURSOR_CLI_VERSION is required to install the Cursor agent" >&2; \
+          exit 1; \
+        fi; \
+        mkdir -p /usr/local/cursor-agent \
+        && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
+         | tar --strip-components=1 -xz -C /usr/local/cursor-agent \
+        && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/agent \
+        && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent ;; \
+    esac
 
 workdir /usr/local
-run if [ "$NOX" != "true" ]; then \
+run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
   wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zx \
   && mv zed.app zed \
   && ln -s /usr/local/zed/bin/zed /bin/zed; \
  fi
 
-run curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
- && rm -rf /root/.cache/antigravity
-run npm install -g @anthropic-ai/claude-code \
-                   @openai/codex \
-                   @zed-industries/codex-acp \
-                   @zed-industries/claude-agent-acp \
- && npm cache clean --force \
- && rm -rf /root/.npm /tmp/*
+run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
+    case ",$$agents," in \
+      *,all,*|*,agy,*) \
+        curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
+        && rm -rf /root/.cache/antigravity ;; \
+    esac
+run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
+    pkgs=""; \
+    case ",$$agents," in *,all,*|*,claude,*) pkgs="$$pkgs @anthropic-ai/claude-code @zed-industries/claude-agent-acp";; esac; \
+    case ",$$agents," in *,all,*|*,codex,*) pkgs="$$pkgs @openai/codex @zed-industries/codex-acp";; esac; \
+    if [ -n "$$pkgs" ]; then \
+      npm install -g $$pkgs \
+      && npm cache clean --force; \
+    fi; \
+    rm -rf /root/.npm /tmp/*
 
 # Standalone archive bundles Node.js 22. Debian's npm is too old for
 # @qwen-code/qwen-code, and /home is replaced by the profile at runtime,
 # so the install has to live under /usr/local.
-run curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh \
- | QWEN_INSTALL_LIB_DIR=/usr/local/lib/qwen-code \
-   QWEN_INSTALL_BIN_DIR=/usr/local/bin \
-   bash -s -- --method standalone --no-modify-path \
- && mkdir -p /etc/qwen-code \
- && rm -rf /root/.qwen /tmp/*
+run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
+    case ",$$agents," in \
+      *,all,*|*,qwen,*) \
+        curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh \
+        | QWEN_INSTALL_LIB_DIR=/usr/local/lib/qwen-code \
+          QWEN_INSTALL_BIN_DIR=/usr/local/bin \
+          bash -s -- --method standalone --no-modify-path \
+        && mkdir -p /etc/qwen-code \
+        && rm -rf /root/.qwen /tmp/* ;; \
+    esac
 
 copy sshd/ai-ide.conf /etc/ssh/sshd_config.d/ai-ide.conf
 

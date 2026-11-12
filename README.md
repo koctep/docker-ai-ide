@@ -64,23 +64,41 @@ A containerized development environment that provides AI-powered code editors (C
 
 ### Building the Container
 
-Full build with GUI editors (VSCode, Cursor, Zed):
+`make build` installs every agent and every graphical application. `make build-all` is the same full image, and it stays full even when `AGENTS` or `NOX` is already set in the environment.
+
+Two variables choose what is installed. Set them in the environment or on the `make` command line.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AGENTS` | `all` | Comma-separated agent ids to install |
+| `NOX` | `false` | `1` or `true` skips graphical applications |
+
+Agent ids:
+
+| Id | Installed tools |
+|----|-----------------|
+| `cursor` | Cursor Agent CLI (`agent`) |
+| `agy` | Google Antigravity (`agy`) |
+| `claude` | Claude Code and `claude-agent-acp` |
+| `codex` | Codex and `codex-acp` |
+| `qwen` | Qwen Code |
+| `all` | Every agent above |
+
+An unknown id fails the build. Spaces around commas are ignored.
 
 ```bash
 make build
-```
-
-CLI-only build without GUI editors (Chromium and all CLI tools are still installed):
-
-```bash
+make build-all
 make build-nox
-# or
+AGENTS=claude,codex make build
+AGENTS=qwen make build-nox
+make build NOX=1
 make build NOX=true
 ```
 
-Skipped in `NOX=true` mode: VSCode, Cursor AppImage, Zed.
+`make build-nox` forces `NOX=true` and still uses `AGENTS` (default `all`).
 
-Always installed: Chromium, OpenSSH server, Cursor Agent CLI (`agent`), Antigravity (`agy`), Claude Code, Codex, Qwen Code, and ACP adapters.
+Skipped when `NOX` is `1` or `true`: Chromium, VS Code, Cursor AppImage, Zed, and the GUI libraries they need. OpenSSH and the selected agents are still installed.
 
 The default build downloads Cursor 1.6.27. To use a different version:
 
@@ -121,7 +139,7 @@ and `AI_PROFILE_PATH` (see [Remote profile volumes](#remote-profile-volumes)).
 Run the sandbox as an SSH remote so Cursor, VS Code, or any SSH-capable IDE
 connects with Remote-SSH. The IDE GUI stays on the host; files and tools stay
 in the container. Rebuild the image (`make build` or `make build-nox`) so
-OpenSSH is installed. SSH mode also works with a `NOX=true` image.
+OpenSSH is installed. SSH mode also works with a `NOX=1` or `NOX=true` image.
 
 ```bash
 ./ai.ide --ssh

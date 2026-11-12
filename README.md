@@ -13,7 +13,7 @@ A containerized development environment that provides AI-powered code editors (C
 ## Features
 
 - **Multiple AI Editors**: Pre-configured Cursor and Zed editors
-- **AI CLI Tools**: Integrated Cursor Agent (`agent`), Google Antigravity (`agy`), Anthropic Claude, and OpenAI Codex command-line interfaces
+- **AI CLI Tools**: Integrated Cursor Agent (`agent`), Google Antigravity (`agy`), Anthropic Claude, OpenAI Codex, and Qwen Code command-line interfaces
 - **GUI Support**: Full X11 forwarding for native desktop experience
 - **SSH server mode**: OpenSSH inside the container for Cursor, VS Code, and other Remote-SSH IDEs
 - **Profile Management**: Isolated development environments using profiles
@@ -80,7 +80,7 @@ make build NOX=true
 
 Skipped in `NOX=true` mode: VSCode, Cursor AppImage, Zed.
 
-Always installed: Chromium, OpenSSH server, Cursor Agent CLI (`agent`), Antigravity (`agy`), Claude Code, Codex, and ACP adapters.
+Always installed: Chromium, OpenSSH server, Cursor Agent CLI (`agent`), Antigravity (`agy`), Claude Code, Codex, Qwen Code, and ACP adapters.
 
 The default build downloads Cursor 1.6.27. To use a different version:
 
@@ -165,6 +165,9 @@ claude-code "Your code question"
 
 # OpenAI Codex
 codex "Your coding request"
+
+# Qwen Code
+qwen "Your coding request"
 ```
 
 ### File Structure
@@ -177,6 +180,7 @@ Local profile (default, `AI_PROFILE_HOST` unset):
 │   ├── .ssh/                # Created on first --ssh if missing; mounted read-only
 │   ├── .claude/             # Agent state and configuration
 │   ├── .codex/              # ... one directory per agent
+│   ├── .qwen/               # Qwen Code state and configuration
 │   └── ...                  # Other user data
 ├── shared/                  # Optional, mounted as /home/shared
 └── tmp/<pid>/               # Per-session /tmp, deleted when the launcher exits
@@ -211,7 +215,8 @@ and the project directory name (`PRJ` below is `$(basename $PWD)`):
 | `CONFIG_DIR/<any-other-file>` | `/home/<same-relative-path>` | ro |
 | `CONFIG_DIR/mcp.json` | `/home/.mcp.json`, `/home/.cursor/mcp.json`, `/home/.agents/mcp_config.json`, `/home/.gemini/config/mcp_config.json` | ro |
 | `CACHE_DIR/managed_config.toml` — generated from `mcp.json` and `CONFIG_DIR/config.toml` | `/etc/codex/managed_config.toml` | ro |
-| every skill from `AGENT_SKILLS` | `/home/.agents/skills/<name>`, `/home/.claude/skills/<name>`, `/home/.cursor/skills/<name>`, `/home/.gemini/skills/<name>`, `/home/.gemini/antigravity-cli/skills/<name>` | ro |
+| `CACHE_DIR/qwen-system-defaults.json` — generated from `mcp.json` | `/etc/qwen-code/system-defaults.json` | ro |
+| every skill from `AGENT_SKILLS` | `/home/.agents/skills/<name>`, `/home/.claude/skills/<name>`, `/home/.cursor/skills/<name>`, `/home/.gemini/skills/<name>`, `/home/.gemini/antigravity-cli/skills/<name>`, `/home/.qwen/skills/<name>` | ro |
 | X11 socket and dbus (Linux) `/tmp/.X11-unix`, `/run/dbus`, `/run/user/$UID/bus` | same paths | rw |
 | X11 cookie (macOS) `/tmp/.docker.xauth.$$` | `/root/.Xauthority` | rw |
 
@@ -240,7 +245,7 @@ Not mounted at all:
 | `AI_SSH_PORT` | Host port published to container port 22 | `2222` |
 | `AI_SSH_BIND` | Address to bind the published SSH port | `127.0.0.1` |
 | `AGENT_SKILLS` | List of skills mounted read-only, separated by colons, spaces or newlines | None |
-| `AGENT_SKILLS_TARGETS` | Skill directories inside the container (relative to `/home`) | `.agents/skills .claude/skills .cursor/skills .gemini/skills .gemini/antigravity-cli/skills` |
+| `AGENT_SKILLS_TARGETS` | Skill directories inside the container (relative to `/home`) | `.agents/skills .claude/skills .cursor/skills .gemini/skills .gemini/antigravity-cli/skills .qwen/skills` |
 | `AGENT_MCP_TARGETS` | Paths `mcp.json` is mounted to (relative to `/home`) | `.mcp.json .cursor/mcp.json .agents/mcp_config.json .gemini/config/mcp_config.json` |
 | `DISPLAY` | X11 display | Current display |
 | `APPURL` | Cursor download URL | Latest stable |
@@ -330,16 +335,24 @@ agents look for:
 | Antigravity (`agy`) | `/home/.gemini/config/mcp_config.json` | `mcp.json` as is |
 | — | `/home/.agents/mcp_config.json` | `mcp.json` as is |
 | Codex | `/etc/codex/managed_config.toml` | generated |
+| Qwen Code | `/etc/qwen-code/system-defaults.json` | generated |
 
-Codex is the only one that needs a conversion: it reads TOML, so
+Codex and Qwen Code need a conversion. Codex reads TOML, so
 `managed_config.toml` with the `[mcp_servers.*]` tables is generated into
 `CACHE_DIR` and mounted read-only. If `CONFIG_DIR/config.toml` exists, it is used
-as the base and the tables are appended to it. The conversion runs on the host
+as the base and the tables are appended to it. Qwen Code keeps MCP servers in
+`settings.json` (`mcpServers`, with `httpUrl` for streamable HTTP). The launcher
+writes that object to `qwen-system-defaults.json`. A Claude entry
+`{"type": "http", "url": "..."}` becomes `httpUrl`; `url` without that type stays
+SSE, which is how Qwen Code reads it. Both conversions run on the host
 `python3` when available, otherwise inside the image.
 
-It goes to the managed config on purpose: `~/.codex/config.toml` has to stay
-writable, codex persists the directory trust into it and fails with
-`failed to persist config` when that file is a read-only mount.
+The generated files stay off the writable user configs on purpose.
+`~/.codex/config.toml` has to stay writable: codex persists the directory trust
+into it and fails with `failed to persist config` when that file is a read-only
+mount. Qwen Code uses the system-defaults layer, the lowest one, so
+`~/.qwen/settings.json` stays writable and a server defined there overrides the
+shared one with the same name.
 
 The target list can be changed with `AGENT_MCP_TARGETS` (space separated paths
 relative to `/home`).
@@ -411,12 +424,14 @@ used:
 | Cursor | `/home/.cursor/skills/<skill-name>` |
 | Antigravity (`agy`), shared | `/home/.gemini/skills/<skill-name>` |
 | Antigravity (`agy`), global | `/home/.gemini/antigravity-cli/skills/<skill-name>` |
+| Qwen Code | `/home/.qwen/skills/<skill-name>` |
 
 Nothing is mounted into `/home/src`: the project directory stays as it is on the
 host. `agy` also reads `.agents/skills` of the workspace, but mounting there
 would litter the project with empty `.agents/skills/<skill-name>` directories,
 so its two home located roots are used instead — the ones its `/skills` command
-calls global and shared.
+calls global and shared. Qwen Code also reads `/home/.agents/skills`; the same
+skill under `/home/.qwen/skills` wins when both exist.
 
 The mounts are read-only, so agents can read the skills but cannot modify the
 originals. Skills whose names collide are skipped after the first one, and

@@ -65,6 +65,16 @@ run npm install -g @anthropic-ai/claude-code \
  && npm cache clean --force \
  && rm -rf /root/.npm /tmp/*
 
+# Standalone archive bundles Node.js 22. Debian's npm is too old for
+# @qwen-code/qwen-code, and /home is replaced by the profile at runtime,
+# so the install has to live under /usr/local.
+run curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh \
+ | QWEN_INSTALL_LIB_DIR=/usr/local/lib/qwen-code \
+   QWEN_INSTALL_BIN_DIR=/usr/local/bin \
+   bash -s -- --method standalone --no-modify-path \
+ && mkdir -p /etc/qwen-code \
+ && rm -rf /root/.qwen /tmp/*
+
 copy sshd/ai-ide.conf /etc/ssh/sshd_config.d/ai-ide.conf
 
 run chown -R $USERID /home

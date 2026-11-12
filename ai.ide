@@ -435,10 +435,12 @@ else
 fi
 
 # MCP servers. A single mcp.json is mounted read-only under every name the
-# agents expect; codex reads toml, so its config is generated from the same file
-# (on top of $CONFIG_DIR/config.toml, when that one exists) and mounted as the
-# managed config: ~/.codex/config.toml has to stay writable, codex persists the
-# directory trust into it.
+# agents expect. Codex reads toml and Qwen Code reads settings JSON, so those
+# two configs are generated from the same file. Codex's result is mounted as
+# the managed config (on top of $CONFIG_DIR/config.toml, when that one exists):
+# ~/.codex/config.toml has to stay writable, codex persists the directory trust
+# into it. Qwen's result is mounted as system defaults so ~/.qwen/settings.json
+# stays writable.
 MCP_TARGETS=${AGENT_MCP_TARGETS:-".mcp.json .cursor/mcp.json .agents/mcp_config.json .gemini/config/mcp_config.json"}
 if [ -e $CONFIG_DIR/mcp.json ]; then
   echo "mounting mcp config from '$CONFIG_DIR/mcp.json'" >&2
@@ -519,6 +521,65 @@ MCP2TOML
   && DOCKER_CMD="$DOCKER_CMD -v $CACHE_DIR/managed_config.toml:/etc/codex/managed_config.toml:ro" \
   || echo "  failed to generate the codex config" >&2
   rm -f $CACHE_DIR/managed_config.toml.tmp
+
+  # Qwen Code keeps MCP servers in settings.json. System defaults are the
+  # lowest layer and are trusted, so the shared servers load without an
+  # approval prompt and without replacing ~/.qwen/settings.json.
+  # Claude's mcp.json marks HTTP with `"type": "http"` plus `url`; Qwen uses
+  # `httpUrl` for that transport and `url` for SSE. Same mapping as
+  # normalizeClaudeMcpServer in qwen-code.
+  cat > $CACHE_DIR/mcp2qwen.py <<'MCP2QWEN'
+"""Convert an mcp.json into Qwen Code system-defaults.json"""
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+servers = config.get("mcpServers") or config.get("servers") or {}
+
+
+def normalize(raw):
+    if not isinstance(raw, dict):
+        return None
+    server = dict(raw)
+    if server.get("command") or server.get("httpUrl") or server.get("tcp"):
+        if "type" in server and server["type"] != "sdk":
+            del server["type"]
+        return server
+    if isinstance(server.get("url"), str):
+        url = server.pop("url")
+        transport = server.pop("type", None)
+        if transport == "http":
+            server["httpUrl"] = url
+        else:
+            server["url"] = url
+            if transport == "sdk":
+                server["type"] = transport
+        return server
+    return server
+
+
+out = {}
+for name, server in servers.items():
+    normalized = normalize(server)
+    if normalized:
+        out[name] = normalized
+
+json.dump({"mcpServers": out}, sys.stdout, indent=2)
+sys.stdout.write("\n")
+MCP2QWEN
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 $CACHE_DIR/mcp2qwen.py $CONFIG_DIR/mcp.json
+  else
+    docker run --rm -v "$CACHE_DIR":/cache:ro -v "$CONFIG_DIR":/config:ro "$AI_IMAGE" \
+      python3 /cache/mcp2qwen.py /config/mcp.json
+  fi > $CACHE_DIR/qwen-system-defaults.json.tmp \
+  && mv $CACHE_DIR/qwen-system-defaults.json.tmp $CACHE_DIR/qwen-system-defaults.json \
+  && echo "  /etc/qwen-code/system-defaults.json (generated in $CACHE_DIR)" >&2 \
+  && DOCKER_CMD="$DOCKER_CMD -v $CACHE_DIR/qwen-system-defaults.json:/etc/qwen-code/system-defaults.json:ro" \
+  || echo "  failed to generate the qwen config" >&2
+  rm -f $CACHE_DIR/qwen-system-defaults.json.tmp
 else
   echo "no mcp.json in $CONFIG_DIR" >&2
 fi
@@ -530,7 +591,7 @@ fi
 # Skill directories of every agent installed in the image, relative to /home.
 # Nothing is mounted into src, the project keeps its own layout; agy sees the
 # gemini pair instead of the workspace .agents/skills it also supports
-SKILLS_TARGETS=${AGENT_SKILLS_TARGETS:-".agents/skills .claude/skills .cursor/skills .gemini/skills .gemini/antigravity-cli/skills"}
+SKILLS_TARGETS=${AGENT_SKILLS_TARGETS:-".agents/skills .claude/skills .cursor/skills .gemini/skills .gemini/antigravity-cli/skills .qwen/skills"}
 MOUNTED_SKILLS=
 
 mount_skill() {

@@ -420,6 +420,86 @@ services:
 specially by the rules above; every other file of the directory is mounted
 read-only into the container home as is.
 
+### Example: Terraform runner over SSH
+
+[`example/compose.yaml`](example/compose.yaml) starts an OpenSSH server on the
+official `hashicorp/terraform` image. The agent inside ai-ide has no Docker and
+no Terraform of its own; it connects to the `terraform` service over SSH and runs
+the scripts there. The project sources are mounted into the service at
+`/home/src`, the same path as in ai-ide.
+
+The commands below use `CONFIG_DIR`, the per-project configuration directory
+`~/.config/ai-ide/$AI_PROFILE/<project>`:
+
+```bash
+CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
+```
+
+1. Copy the example:
+
+   ```bash
+   mkdir -p "$CONFIG_DIR"
+   cp example/compose.yaml "$CONFIG_DIR/compose.yaml"
+   ```
+
+2. Create a key pair for the agent. Keep it outside `.ssh`: a file under
+   `CONFIG_DIR/.ssh` makes the launcher create `PROFILE_DIR/.ssh`, which is
+   then mounted read-only and skips the first-start setup of SSH server mode.
+
+   ```bash
+   mkdir -p "$CONFIG_DIR/.config/terraform-ssh"
+   ssh-keygen -t ed25519 -N '' -C ai-ide-terraform \
+     -f "$CONFIG_DIR/.config/terraform-ssh/id_ed25519"
+   ```
+
+3. Write the SSH client config next to the key:
+
+   ```bash
+   cat > "$CONFIG_DIR/.config/terraform-ssh/config" <<'EOF'
+   Host terraform
+     User terraform
+     IdentityFile ~/.config/terraform-ssh/id_ed25519
+     IdentitiesOnly yes
+     StrictHostKeyChecking accept-new
+     UserKnownHostsFile /tmp/terraform_known_hosts
+   EOF
+   ```
+
+   The key and the config are mounted read-only into
+   `/home/.config/terraform-ssh/`. Known hosts go to the session `/tmp` because
+   the server generates new host keys every time its container is created.
+
+4. Pass the public key to compose from the launcher `.env`. `CONFIG_DIR` is
+   already set when the launcher sources the file:
+
+   ```bash
+   # $CONFIG_DIR/.env
+   export TERRAFORM_SSH_PUBKEY=$(cat "$CONFIG_DIR/.config/terraform-ssh/id_ed25519.pub")
+   ```
+
+   Without it, compose stops with an error and the session does not start.
+
+5. Start ai-ide as usual. Inside the container, the agent runs:
+
+   ```bash
+   ssh -F ~/.config/terraform-ssh/config terraform \
+     'cd /home/src && terraform init -input=false && terraform plan -no-color'
+   ```
+
+Details:
+
+- `TERRAFORM_VERSION` selects the image tag. The default is `1.17`.
+- Port 22 is not published on the host. Only public key logins of the
+  `terraform` user are accepted; root login and passwords are disabled.
+- sshd starts sessions with a clean environment. Every variable of the
+  service container is copied into the user's `~/.ssh/environment`, so
+  provider credentials and `TF_VAR_*` belong in the service `environment:`
+  section of the compose file.
+- The `terraform` user gets the UID of the owner of the project directory, so
+  files Terraform writes there (`.terraform`, lock files, local state) belong
+  to the host user. When the directory is shown as owned by root, as with some
+  macOS Docker setups, UID 1000 is used.
+
 ### Skills
 
 `AGENT_SKILLS` is a list of skills to mount, and they may live in unrelated
@@ -485,6 +565,7 @@ src/
 ├── Makefile               # Build automation
 ├── ai.ide                 # Universal launcher script
 ├── sshd/ai-ide.conf       # OpenSSH server config drop-in
+├── example/compose.yaml   # Terraform runner over SSH, a development service example
 └── README.md             # This file
 ```
 

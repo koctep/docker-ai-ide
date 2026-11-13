@@ -1,0 +1,74 @@
+# Terraform runner for ai-ide.
+#
+# The service runs an OpenSSH server on the official Terraform image. The agent
+# inside ai-ide connects to it by the service name and runs terraform there:
+#
+#   ssh -F ~/.config/terraform-ssh/config terraform 'cd /home/src && terraform plan'
+#
+# Copy this file to ~/.config/ai-ide/$AI_PROFILE/<project>/compose.yaml.
+# Setup, the SSH key and the client config are described in README.md,
+# section "Example: Terraform runner over SSH".
+#
+# Security notes:
+# - Port 22 is not published on the host. Only containers on the compose
+#   networks (the ai-ide session) can reach the server.
+# - Only public key authentication is allowed. Root login is disabled.
+# - The project sources are mounted read-write at the same path as in ai-ide,
+#   /home/src, so paths are identical on both sides.
+services:
+  terraform:
+    image: hashicorp/terraform:${TERRAFORM_VERSION:-1.17}
+    environment:
+      # Public key the agent logs in with. Set it in the launcher .env, see
+      # README.md. Compose stops with this message when it is missing.
+      TERRAFORM_SSH_PUBKEY: ${TERRAFORM_SSH_PUBKEY:?export TERRAFORM_SSH_PUBKEY in the ai-ide .env}
+      # Variables listed here reach the SSH sessions too, for example provider
+      # credentials. A bare name takes the value from the launcher environment:
+      # AWS_PROFILE:
+      # TF_VAR_region: eu-central-1
+    volumes:
+      - .:/home/src
+    entrypoint:
+      - /bin/sh
+      - -c
+      # "$$" is a literal "$" for the shell, compose interpolates single "$".
+      - |
+        set -eu
+
+        # The login user gets the owner of the project sources, so the files
+        # terraform writes there (.terraform, lock files, local state) belong
+        # to the host user.
+        uid=$$(stat -c %u /home/src)
+        [ "$$uid" -ne 0 ] || uid=1000
+        if ! id terraform >/dev/null 2>&1; then
+          adduser -D -H -h /home -s /bin/sh -u "$$uid" terraform
+          # A locked account ("!") cannot log in even with a key, "*" allows
+          # public key logins and still has no usable password.
+          echo 'terraform:*' | chpasswd -e
+        fi
+
+        mkdir -p /home/.ssh
+        printf '%s\n' "$$TERRAFORM_SSH_PUBKEY" > /home/.ssh/authorized_keys
+        # sshd starts sessions with a clean environment. The container
+        # variables are handed over through ~/.ssh/environment.
+        env | grep -vE '^(HOME|HOSTNAME|PWD|SHLVL|TERRAFORM_SSH_PUBKEY)=' \
+          > /home/.ssh/environment || true
+        chown terraform:terraform /home /home/.ssh /home/.ssh/*
+        chmod 700 /home/.ssh
+        chmod 600 /home/.ssh/*
+
+        cat > /etc/ssh/sshd_config.d/ai-ide.conf <<'EOF'
+        PermitRootLogin no
+        PasswordAuthentication no
+        KbdInteractiveAuthentication no
+        PubkeyAuthentication yes
+        AllowUsers terraform
+        PermitUserEnvironment yes
+        EOF
+
+        ssh-keygen -A
+        exec /usr/sbin/sshd -D -e
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "22"]
+      interval: 2s
+      retries: 15

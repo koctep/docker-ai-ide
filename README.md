@@ -70,27 +70,32 @@ Two variables choose what is installed. Set them in the environment or on the `m
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `AGENTS` | `all` | Comma-separated agent ids to install |
-| `NOX` | `false` | `1` or `true` skips graphical applications |
+| `AGENTS` | `all` | Comma-separated ids of agents and graphical apps to install |
+| `NOX` | `false` | `1` or `true` drops every graphical app from `AGENTS` |
 
-Agent ids:
+Only the listed ids are installed. Ids:
 
-| Id | Installed tools |
-|----|-----------------|
-| `cursor` | Cursor Agent CLI (`agent`) |
-| `agy` | Google Antigravity (`agy`) |
-| `claude` | Claude Code and `claude-agent-acp` |
-| `codex` | Codex and `codex-acp` |
-| `qwen` | Qwen Code |
-| `all` | Every agent above |
+| Id | Installed tools | Graphical |
+|----|-----------------|-----------|
+| `cursor` | Cursor Agent CLI (`agent`) | no |
+| `agy` | Google Antigravity (`agy`) | no |
+| `claude` | Claude Code and `claude-agent-acp` | no |
+| `codex` | Codex and `codex-acp` | no |
+| `qwen` | Qwen Code | no |
+| `chromium` | Chromium | yes |
+| `vscode` | VS Code | yes |
+| `cursor-ide` | Cursor editor (AppImage) | yes |
+| `zed` | Zed | yes |
+| `all` | Every id above | |
 
-An unknown id fails the build. Spaces around commas are ignored.
+An unknown id fails the build. Spaces around commas are ignored. The GUI libraries are installed only when at least one graphical app remains selected.
 
 ```bash
 make build
 make build-all
 make build-nox
 AGENTS=claude,codex make build
+AGENTS=qwen,vscode make build
 AGENTS=qwen make build-nox
 make build NOX=1
 make build NOX=true
@@ -98,7 +103,7 @@ make build NOX=true
 
 `make build-nox` forces `NOX=true` and still uses `AGENTS` (default `all`).
 
-Skipped when `NOX` is `1` or `true`: Chromium, VS Code, Cursor AppImage, Zed, and the GUI libraries they need. OpenSSH and the selected agents are still installed.
+When `NOX` is `1` or `true`, graphical ids are removed from the selection, with a warning if they were listed by name: `AGENTS=vscode,qwen NOX=1` installs only Qwen Code. OpenSSH and the selected agents are still installed.
 
 The default build downloads Cursor 1.6.27. To use a different version:
 
@@ -466,6 +471,9 @@ default in `ai.ide`.
 | `APPURL` | Cursor AppImage URL | Latest from Makefile |
 | `USERNAME` | Container username | Current user |
 | `USERID` | Container user ID | Current UID |
+| `APP_CHROMIUM`, `APP_VSCODE`, `APP_CURSOR`, `APP_ZED` | `true` installs that graphical app; the Makefile sets them from `AGENTS` and `NOX` | `true` |
+| `AGENT_CURSOR`, `AGENT_AGY`, `AGENT_CLAUDE`, `AGENT_CODEX`, `AGENT_QWEN` | `true` installs that agent; the Makefile sets them from `AGENTS` | `true` |
+| `CURSOR_CLI_VERSION` | Cursor Agent CLI version; required when `AGENT_CURSOR=true`, detected by the Makefile | — |
 
 ## Development
 

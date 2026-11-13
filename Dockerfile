@@ -3,19 +3,16 @@ from debian:stable
 arg USERNAME
 arg USERID
 arg ARCH
-arg NOX=false
-arg AGENTS=all
-
-run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
-    if [ -n "$$agents" ]; then \
-      oldifs=$$IFS; IFS=','; set -f; set -- $$agents; set +f; IFS=$$oldifs; \
-      for a in "$$@"; do \
-        case "$$a" in \
-          all|cursor|agy|claude|codex|qwen) ;; \
-          *) echo "unknown agent: $$a" >&2; exit 1 ;; \
-        esac; \
-      done; \
-    fi
+# The Makefile turns AGENTS and NOX into one true/false flag per app and agent.
+arg APP_CHROMIUM=true
+arg APP_VSCODE=true
+arg APP_CURSOR=true
+arg APP_ZED=true
+arg AGENT_CURSOR=true
+arg AGENT_AGY=true
+arg AGENT_CLAUDE=true
+arg AGENT_CODEX=true
+arg AGENT_QWEN=true
 
 run apt update \
  && apt install -y wget curl iputils-ping iproute2 ripgrep \
@@ -38,17 +35,26 @@ run wget -q http://apt.langed.org/67352D99.key -O /etc/apt/trusted.gpg.d/apt.lan
  && apt clean \
  && rm -rf /var/lib/apt/lists/*
 
-run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
+# Libraries shared by every graphical app.
+run if [ "$APP_CHROMIUM" = "true" ] || [ "$APP_VSCODE" = "true" ] \
+   || [ "$APP_CURSOR" = "true" ] || [ "$APP_ZED" = "true" ]; then \
   apt update \
   && apt install -y libglib2.0-0 libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
                     libcups2 libgtk-3-0 libgbm1 libasound2 libx11-xcb1 \
-                    xdg-utils chromium \
+                    xdg-utils \
                     mesa-vulkan-drivers mesa-utils \
   && apt clean \
   && rm -rf /var/lib/apt/lists/*; \
  fi
 
-run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
+run if [ "$APP_CHROMIUM" = "true" ]; then \
+  apt update \
+  && apt install -y chromium \
+  && apt clean \
+  && rm -rf /var/lib/apt/lists/*; \
+ fi
+
+run if [ "$APP_VSCODE" = "true" ]; then \
   wget -O vscode.deb "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-$ARCH" \
   && apt update \
   && (dpkg -i vscode.deb || apt install -f -y) \
@@ -57,7 +63,7 @@ run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
   && rm -rf /var/lib/apt/lists/*; \
  fi
 
-run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
+run if [ "$APP_CURSOR" = "true" ]; then \
   wget -O cursor.AppImage https://api2.cursor.sh/updates/download/golden/linux-$ARCH/cursor/ \
   && chmod +x cursor.AppImage \
   && ./cursor.AppImage --appimage-extract \
@@ -66,56 +72,49 @@ run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
  fi
 
 arg CURSOR_CLI_VERSION
-run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
-    case ",$$agents," in \
-      *,all,*|*,cursor,*) \
-        if [ -z "$CURSOR_CLI_VERSION" ]; then \
-          echo "CURSOR_CLI_VERSION is required to install the Cursor agent" >&2; \
-          exit 1; \
-        fi; \
-        mkdir -p /usr/local/cursor-agent \
-        && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
-         | tar --strip-components=1 -xz -C /usr/local/cursor-agent \
-        && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/agent \
-        && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent ;; \
-    esac
+run if [ "$AGENT_CURSOR" = "true" ]; then \
+  if [ -z "$CURSOR_CLI_VERSION" ]; then \
+    echo "CURSOR_CLI_VERSION is required to install the Cursor agent" >&2; \
+    exit 1; \
+  fi; \
+  mkdir -p /usr/local/cursor-agent \
+  && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/${ARCH}/agent-cli-package.tar.gz" \
+   | tar --strip-components=1 -xz -C /usr/local/cursor-agent \
+  && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/agent \
+  && ln -sf /usr/local/cursor-agent/cursor-agent /usr/local/bin/cursor-agent; \
+ fi
 
 workdir /usr/local
-run if [ "$NOX" != "true" ] && [ "$NOX" != "1" ]; then \
+run if [ "$APP_ZED" = "true" ]; then \
   wget -O - $(curl https://zed.dev/api/releases/stable/latest/zed-linux-$(uname -m).tar.gz) | tar zx \
   && mv zed.app zed \
   && ln -s /usr/local/zed/bin/zed /bin/zed; \
  fi
 
-run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
-    case ",$$agents," in \
-      *,all,*|*,agy,*) \
-        curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
-        && rm -rf /root/.cache/antigravity ;; \
-    esac
-run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
-    pkgs=""; \
-    case ",$$agents," in *,all,*|*,claude,*) pkgs="$$pkgs @anthropic-ai/claude-code @zed-industries/claude-agent-acp";; esac; \
-    case ",$$agents," in *,all,*|*,codex,*) pkgs="$$pkgs @openai/codex @zed-industries/codex-acp";; esac; \
-    if [ -n "$$pkgs" ]; then \
-      npm install -g $$pkgs \
-      && npm cache clean --force; \
-    fi; \
-    rm -rf /root/.npm /tmp/*
+run if [ "$AGENT_AGY" = "true" ]; then \
+  curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin \
+  && rm -rf /root/.cache/antigravity; \
+ fi
+run pkgs=""; \
+ if [ "$AGENT_CLAUDE" = "true" ]; then pkgs="$pkgs @anthropic-ai/claude-code @zed-industries/claude-agent-acp"; fi; \
+ if [ "$AGENT_CODEX" = "true" ]; then pkgs="$pkgs @openai/codex @zed-industries/codex-acp"; fi; \
+ if [ -n "$pkgs" ]; then \
+   npm install -g $pkgs \
+   && npm cache clean --force; \
+ fi; \
+ rm -rf /root/.npm /tmp/*
 
 # Standalone archive bundles Node.js 22. Debian's npm is too old for
 # @qwen-code/qwen-code, and /home is replaced by the profile at runtime,
 # so the install has to live under /usr/local.
-run agents=$$(printf '%s' "$AGENTS" | tr -d ' '); \
-    case ",$$agents," in \
-      *,all,*|*,qwen,*) \
-        curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh \
-        | QWEN_INSTALL_LIB_DIR=/usr/local/lib/qwen-code \
-          QWEN_INSTALL_BIN_DIR=/usr/local/bin \
-          bash -s -- --method standalone --no-modify-path \
-        && mkdir -p /etc/qwen-code \
-        && rm -rf /root/.qwen /tmp/* ;; \
-    esac
+run if [ "$AGENT_QWEN" = "true" ]; then \
+  curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh \
+  | QWEN_INSTALL_LIB_DIR=/usr/local/lib/qwen-code \
+    QWEN_INSTALL_BIN_DIR=/usr/local/bin \
+    bash -s -- --method standalone --no-modify-path \
+  && mkdir -p /etc/qwen-code \
+  && rm -rf /root/.qwen /tmp/*; \
+ fi
 
 copy sshd/ai-ide.conf /etc/ssh/sshd_config.d/ai-ide.conf
 

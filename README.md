@@ -405,6 +405,9 @@ services:
   `./data:/data`) refer to the project sources, and compose reads variables for
   interpolation from `$PWD/.env`. Variables from `CONFIG_DIR/.env` reach compose
   only when they are `export`ed there.
+- The launcher sets `AI_USER`, `AI_UID` and `AI_GID` for compose: the name, UID
+  and GID of the IDE container user (`$(id -un)`, `$UID` and `44`). A service
+  can use them to run as the same user, for example `user: "${AI_UID}:${AI_GID}"`.
 - The services are started with `docker compose up -d --wait`, so the container
   starts only after every service with a healthcheck is healthy. If the start
   fails, the launcher exits without starting the container.
@@ -427,6 +430,14 @@ official `hashicorp/terraform` image. The agent inside ai-ide has no Docker and
 no Terraform of its own; it connects to the `terraform` service over SSH and runs
 the scripts there. The project sources are mounted into the service at
 `/home/src`, the same path as in ai-ide.
+
+Everything in the service runs as the user who starts ai-ide: the same name,
+UID and GID as in the IDE container (`AI_USER`, `AI_UID`, `AI_GID`). The image
+is built on the first start with that account; the build is the only step that
+runs as root. sshd runs unprivileged as that user on port 2222, so it can log
+in no one else. The build uses `dockerfile_inline`, which needs the Docker
+buildx plugin (it ships with Docker Desktop and the `docker-buildx-plugin`
+package).
 
 The commands below use `CONFIG_DIR`, the per-project configuration directory
 `~/.config/ai-ide/$AI_PROFILE/<project>`:
@@ -457,7 +468,7 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
    ```bash
    cat > "$CONFIG_DIR/.config/terraform-ssh/config" <<'EOF'
    Host terraform
-     User terraform
+     Port 2222
      IdentityFile ~/.config/terraform-ssh/id_ed25519
      IdentitiesOnly yes
      StrictHostKeyChecking accept-new
@@ -465,9 +476,11 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
    EOF
    ```
 
-   The key and the config are mounted read-only into
-   `/home/.config/terraform-ssh/`. Known hosts go to the session `/tmp` because
-   the server generates new host keys every time its container is created.
+   There is no `User` line: ssh logs in with the local name, which is already
+   the name of the user who starts ai-ide. The key and the config are mounted
+   read-only into `/home/.config/terraform-ssh/`. Known hosts go to the session
+   `/tmp` because the server generates a new host key every time its container
+   is created.
 
 4. Pass the public key to compose from the launcher `.env`. `CONFIG_DIR` is
    already set when the launcher sources the file:
@@ -488,17 +501,18 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
 
 Details:
 
-- `TERRAFORM_VERSION` selects the image tag. The default is `1.17`.
-- Port 22 is not published on the host. Only public key logins of the
-  `terraform` user are accepted; root login and passwords are disabled.
+- `TERRAFORM_VERSION` selects the base image tag. The default is `1.17`. The
+  built image is tagged
+  `ai-ide-terraform:<version>-<AI_USER>-<AI_UID>-<AI_GID>`, so another version
+  or user gets its own build.
+- The SSH port is not published on the host. Only public key logins are
+  accepted, and passwords are disabled.
+- Files Terraform writes into the project (`.terraform`, lock files, local
+  state) belong to the same UID and GID as the files the IDE container writes.
 - sshd starts sessions with a clean environment. Every variable of the
   service container is copied into the user's `~/.ssh/environment`, so
   provider credentials and `TF_VAR_*` belong in the service `environment:`
   section of the compose file.
-- The `terraform` user gets the UID of the owner of the project directory, so
-  files Terraform writes there (`.terraform`, lock files, local state) belong
-  to the host user. When the directory is shown as owned by root, as with some
-  macOS Docker setups, UID 1000 is used.
 
 ### Skills
 

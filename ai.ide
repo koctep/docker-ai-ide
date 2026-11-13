@@ -162,8 +162,11 @@ cleanup_tmp() {
   fi
 }
 
+# The identity of the container user (see "-u $UID:44" below) is passed to
+# compose, so a service can run as the same user as the IDE container.
 compose() {
-  docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE_PATH" \
+  AI_USER=$(id -un) AI_UID=$UID AI_GID=44 \
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE_PATH" \
     --project-directory "$PWD" "$@"
 }
 

@@ -3,7 +3,7 @@
 # The service runs an OpenSSH server on the official Terraform image. The agent
 # inside ai-ide connects to it by the service name and runs terraform there:
 #
-#   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra plan
+#   ssh -F ~/.config/service-ssh/config terraform terraform -chdir=infra plan
 #
 # Copy this file to ~/.config/ai-ide/$AI_PROFILE/<project>/compose.yaml.
 # Setup, the SSH key and the client config are described in README.md,
@@ -119,11 +119,11 @@ configs:
       DisableForwarding yes
       ForceCommand /usr/local/bin/terraform-ssh
 
-  # Public key the agent logs in with. Set TERRAFORM_SSH_PUBKEY in the launcher
+  # Public key the agent logs in with. Set AI_SERVICE_SSH_PUBKEY in the launcher
   # .env, see README.md. "restrict" drops forwarding and the TTY for the key too.
   authorized_keys:
     content: |
-      restrict ${TERRAFORM_SSH_PUBKEY:?export TERRAFORM_SSH_PUBKEY in the ai-ide .env}
+      restrict ${AI_SERVICE_SSH_PUBKEY:?export AI_SERVICE_SSH_PUBKEY in the ai-ide .env}
 
   # The only program an SSH session can run.
   terraform-ssh:

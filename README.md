@@ -412,6 +412,11 @@ services:
 - The services are started with `docker compose up -d --wait`, so the container
   starts only after every service with a healthcheck is healthy. If the start
   fails, the launcher exits without starting the container.
+- Pass `--rebuild` to any launcher, for example `vscode.ide --rebuild` or
+  `./ai.ide --rebuild --ssh`, to add `--build` to that Compose start. Use it
+  after changing a service's Dockerfile, inline Dockerfile, or build inputs.
+  Docker's build cache remains enabled. The flag only affects Compose services;
+  it does not rebuild the IDE image. Ordinary starts do not force a build.
 - The container joins every network of the compose project, so a service is
   reachable by its name, for example `postgres:5432`. Joining more than one
   network needs Docker Engine 25 or later.
@@ -456,32 +461,34 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
    cp example/compose.yaml "$CONFIG_DIR/compose.yaml"
    ```
 
-2. Create a key pair for the agent. Keep it outside `.ssh`: a file under
+2. Create a key pair for the agent to access development services. The
+   `.config/service-ssh` directory can also hold SSH config entries for other
+   services. Keep it outside `.ssh`: a file under
    `CONFIG_DIR/.ssh` makes the launcher create `PROFILE_DIR/.ssh`, which is
    then mounted read-only and skips the first-start setup of SSH server mode.
 
    ```bash
-   mkdir -p "$CONFIG_DIR/.config/terraform-ssh"
-   ssh-keygen -t ed25519 -N '' -C ai-ide-terraform \
-     -f "$CONFIG_DIR/.config/terraform-ssh/id_ed25519"
+   mkdir -p "$CONFIG_DIR/.config/service-ssh"
+   ssh-keygen -t ed25519 -N '' -C ai-ide-services \
+     -f "$CONFIG_DIR/.config/service-ssh/id_ed25519"
    ```
 
 3. Write the SSH client config next to the key:
 
    ```bash
-   cat > "$CONFIG_DIR/.config/terraform-ssh/config" <<'EOF'
+   cat > "$CONFIG_DIR/.config/service-ssh/config" <<'EOF'
    Host terraform
      Port 2222
-     IdentityFile ~/.config/terraform-ssh/id_ed25519
+     IdentityFile ~/.config/service-ssh/id_ed25519
      IdentitiesOnly yes
      StrictHostKeyChecking accept-new
-     UserKnownHostsFile /tmp/terraform_known_hosts
+     UserKnownHostsFile /tmp/service_known_hosts
    EOF
    ```
 
    There is no `User` line: ssh logs in with the local name, which is already
    the name of the user who starts ai-ide. The key and the config are mounted
-   read-only into `/home/.config/terraform-ssh/`. Known hosts go to the session
+   read-only into `/home/.config/service-ssh/`. Known hosts go to the session
    `/tmp` because the server generates a new host key every time its container
    is created.
 
@@ -490,7 +497,7 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
 
    ```bash
    # $CONFIG_DIR/.env
-   export TERRAFORM_SSH_PUBKEY=$(cat "$CONFIG_DIR/.config/terraform-ssh/id_ed25519.pub")
+   export AI_SERVICE_SSH_PUBKEY=$(cat "$CONFIG_DIR/.config/service-ssh/id_ed25519.pub")
    ```
 
    Without it, compose stops with an error and the session does not start.
@@ -499,8 +506,8 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
    command per SSH call. `-chdir` is relative to the project:
 
    ```bash
-   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra init -input=false
-   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra plan -no-color
+   ssh -F ~/.config/service-ssh/config terraform terraform -chdir=infra init -input=false
+   ssh -F ~/.config/service-ssh/config terraform terraform -chdir=infra plan -no-color
    ```
 
 #### What an SSH session can do

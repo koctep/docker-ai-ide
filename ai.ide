@@ -4,9 +4,14 @@ LAUNCHER=$0
 CLI_SSH=
 CLI_SSH_PORT=
 CLI_SSH_BIND=
+CLI_REBUILD=
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --rebuild)
+      CLI_REBUILD=1
+      shift
+      ;;
     --ssh)
       CLI_SSH=1
       shift
@@ -684,7 +689,9 @@ if [ -e "$COMPOSE_FILE_PATH" ]; then
   fi
   echo "starting compose services from '$COMPOSE_FILE_PATH' (project $COMPOSE_PROJECT)" >&2
   COMPOSE_STARTED=1
-  if ! compose up -d --wait; then
+  COMPOSE_UP_ARGS=(up -d --wait)
+  [ -n "$CLI_REBUILD" ] && COMPOSE_UP_ARGS+=(--build)
+  if ! compose "${COMPOSE_UP_ARGS[@]}"; then
     echo "failed to start compose project '$COMPOSE_PROJECT'" >&2
     exit 1
   fi

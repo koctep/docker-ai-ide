@@ -254,6 +254,7 @@ Not mounted at all:
 | `CONFIG_DIR/.exports` | turned into `docker run -e` arguments |
 | `CONFIG_DIR/config.toml` | used as the base of the generated codex config |
 | `CONFIG_DIR/compose.yaml` | started with docker compose by the launcher, see [Development services](#development-services) |
+| `CONFIG_DIR/compose/` | files of the compose services (build contexts, configs), not meant for the container home |
 
 ### Environment Variables
 

@@ -414,8 +414,10 @@ DOCKER_CMD="$DOCKER_CMD -e TMPDIR=${TMPDIR_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e LANG=en_US.UTF-8 -e LC_ALL=en_US.UTF-8"
 DOCKER_CMD="$DOCKER_CMD -e DBUS_SESSION_BUS_ADDRESS=${DBUS_ADDR}"
 echo "mounting config files from '$CONFIG_DIR'" >&2
+# CONFIG_DIR/compose holds files of the compose services (build contexts,
+# configs), not files for the container home, so find does not enter it.
 [ -d $CONFIG_DIR ] && \
-for f in $(cd $CONFIG_DIR && find . -type f | sed 's|^\./||' \
+for f in $(cd $CONFIG_DIR && find . -path ./compose -prune -o -type f -print | sed 's|^\./||' \
            | grep -vE '^(\.env|\.exports|mcp\.json|config\.toml|compose\.yaml)$'); do
   echo "  $f" >&2
   ensure_home_file "$f"

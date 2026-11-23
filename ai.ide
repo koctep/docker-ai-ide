@@ -447,6 +447,15 @@ fi
 # into it. Qwen's result is mounted as system defaults so ~/.qwen/settings.json
 # stays writable.
 MCP_TARGETS=${AGENT_MCP_TARGETS:-".mcp.json .cursor/mcp.json .agents/mcp_config.json .gemini/config/mcp_config.json"}
+
+# Other running sessions of the same project mount the generated files too. A
+# file bind mount keeps the inode it started with, so replacing the file with mv
+# leaves those sessions a deleted file (ENOENT on Docker Desktop). Rewrite the
+# file in place, and only when its content changed.
+update_in_place() {
+  cmp -s "$1" "$2" || cat "$1" > "$2"
+}
+
 if [ -e $CONFIG_DIR/mcp.json ]; then
   echo "mounting mcp config from '$CONFIG_DIR/mcp.json'" >&2
   for target in $MCP_TARGETS; do
@@ -521,7 +530,7 @@ MCP2TOML
         python3 /cache/mcp2toml.py /config/mcp.json
     fi
   } > $CACHE_DIR/managed_config.toml.tmp \
-  && mv $CACHE_DIR/managed_config.toml.tmp $CACHE_DIR/managed_config.toml \
+  && update_in_place $CACHE_DIR/managed_config.toml.tmp $CACHE_DIR/managed_config.toml \
   && echo "  /etc/codex/managed_config.toml (generated in $CACHE_DIR)" >&2 \
   && DOCKER_CMD="$DOCKER_CMD -v $CACHE_DIR/managed_config.toml:/etc/codex/managed_config.toml:ro" \
   || echo "  failed to generate the codex config" >&2
@@ -580,7 +589,7 @@ MCP2QWEN
     docker run --rm -v "$CACHE_DIR":/cache:ro -v "$CONFIG_DIR":/config:ro "$AI_IMAGE" \
       python3 /cache/mcp2qwen.py /config/mcp.json
   fi > $CACHE_DIR/qwen-system-defaults.json.tmp \
-  && mv $CACHE_DIR/qwen-system-defaults.json.tmp $CACHE_DIR/qwen-system-defaults.json \
+  && update_in_place $CACHE_DIR/qwen-system-defaults.json.tmp $CACHE_DIR/qwen-system-defaults.json \
   && echo "  /etc/qwen-code/system-defaults.json (generated in $CACHE_DIR)" >&2 \
   && DOCKER_CMD="$DOCKER_CMD -v $CACHE_DIR/qwen-system-defaults.json:/etc/qwen-code/system-defaults.json:ro" \
   || echo "  failed to generate the qwen config" >&2

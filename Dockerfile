@@ -116,6 +116,8 @@ run if [ "$AGENT_QWEN" = "true" ]; then \
   && rm -rf /root/.qwen /tmp/*; \
  fi
 
+copy --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 copy sshd/ai-ide.conf /etc/ssh/sshd_config.d/ai-ide.conf
 
 run chown -R $USERID /home

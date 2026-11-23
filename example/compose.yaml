@@ -3,7 +3,7 @@
 # The service runs an OpenSSH server on the official Terraform image. The agent
 # inside ai-ide connects to it by the service name and runs terraform there:
 #
-#   ssh -F ~/.config/terraform-ssh/config terraform 'cd /home/src && terraform plan'
+#   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra plan
 #
 # Copy this file to ~/.config/ai-ide/$AI_PROFILE/<project>/compose.yaml.
 # Setup, the SSH key and the client config are described in README.md,
@@ -13,8 +13,25 @@
 # and GID as the ai-ide container user. The launcher passes them to compose as
 # AI_USER, AI_UID and AI_GID. Only the image build, which creates that account,
 # runs as root. sshd itself runs as this user, so it can only log this user in.
+# The user's home directory is the project, /home/src: SSH sessions start
+# there, and whatever Terraform keeps in its home (~/.terraform.d,
+# ~/.terraformrc) belongs to the project too. The host key and the container
+# variables are kept outside it, in /var/lib/terraform-ssh.
 #
-# Security notes:
+# The SSH session can run terraform and nothing else:
+# - sshd forces every session through terraform-ssh (see configs below). It
+#   accepts only "terraform <allowed subcommand> ...", runs it in the project
+#   without a shell, and refuses arguments that point outside it.
+# - No shell, no sftp/scp, no port, agent or X11 forwarding, no TTY.
+# - terraform-ssh, sshd_config and authorized_keys are compose configs: they
+#   are owned by root and read-only, so the session user cannot change them.
+# - The container variables, provider credentials included, reach terraform
+#   but cannot be printed with env, a shell or "terraform console". Terraform
+#   code the agent writes still runs here: file("/proc/self/environ"), the
+#   external data source or a local-exec provisioner can read them. Give the
+#   runner only credentials you accept the agent seeing indirectly.
+#
+# Network notes:
 # - The SSH port is not published on the host. Only containers on the compose
 #   networks (the ai-ide session) can reach the server.
 # - Only public key authentication is allowed.
@@ -36,57 +53,122 @@ services:
               group=${AI_USER}; \
               addgroup -g ${AI_GID} "$$group"; \
             fi; \
-            adduser -D -H -h /home -s /bin/sh -u ${AI_UID} -G "$$group" ${AI_USER}; \
+            adduser -D -H -h /home/src -s /bin/sh -u ${AI_UID} -G "$$group" ${AI_USER}; \
             echo '${AI_USER}:*' | chpasswd -e; \
-            chown ${AI_UID}:${AI_GID} /home
+            install -d -m 0700 -o ${AI_UID} -g ${AI_GID} /var/lib/terraform-ssh
         USER ${AI_UID}:${AI_GID}
-        WORKDIR /home
+        WORKDIR /home/src
     environment:
-      # Public key the agent logs in with. Set it in the launcher .env, see
-      # README.md. Compose stops with this message when it is missing.
-      TERRAFORM_SSH_PUBKEY: ${TERRAFORM_SSH_PUBKEY:?export TERRAFORM_SSH_PUBKEY in the ai-ide .env}
-      # Variables listed here reach the SSH sessions too, for example provider
+      # Variables listed here reach terraform, for example provider
       # credentials. A bare name takes the value from the launcher environment:
-      # AWS_PROFILE:
+      # AWS_ACCESS_KEY_ID:
+      # AWS_SECRET_ACCESS_KEY:
       # TF_VAR_region: eu-central-1
+      TF_IN_AUTOMATION: "1"
     volumes:
       - .:/home/src
+    configs:
+      - source: terraform-ssh
+        target: /usr/local/bin/terraform-ssh
+        mode: 0555
+      - source: sshd_config
+        target: /etc/ssh/ai-ide/sshd_config
+        mode: 0444
+      - source: authorized_keys
+        target: /etc/ssh/ai-ide/authorized_keys
+        mode: 0444
     entrypoint:
       - /bin/sh
       - -c
       - |
         set -eu
-        # Keys and configs below are private. The umask is restored before
-        # sshd starts, sessions inherit it.
+        # The host key and the container variables are private and stay out of
+        # the project. The umask is restored before sshd starts, sessions
+        # inherit it.
         umask 077
-        mkdir -p /home/.ssh
-
-        printf '%s\n' "$$TERRAFORM_SSH_PUBKEY" > /home/.ssh/authorized_keys
-        # sshd starts sessions with a clean environment. The container
-        # variables are handed over through ~/.ssh/environment.
-        env | grep -vE '^(HOME|HOSTNAME|PWD|SHLVL|TERRAFORM_SSH_PUBKEY)=' \
-          > /home/.ssh/environment || true
-
-        [ -f /home/.ssh/ssh_host_ed25519_key ] ||
-          ssh-keygen -q -t ed25519 -N '' -f /home/.ssh/ssh_host_ed25519_key
-
-        # An unprivileged sshd cannot bind port 22 and has no access to
-        # /etc/ssh host keys, so it gets its own config in the home directory.
-        cat > /home/.ssh/sshd_config <<'EOF'
-        Port 2222
-        HostKey /home/.ssh/ssh_host_ed25519_key
-        PidFile none
-        AuthorizedKeysFile .ssh/authorized_keys
-        PubkeyAuthentication yes
-        PasswordAuthentication no
-        KbdInteractiveAuthentication no
-        PermitUserEnvironment yes
-        Subsystem sftp internal-sftp
-        EOF
-
+        [ -f /var/lib/terraform-ssh/ssh_host_ed25519_key ] ||
+          ssh-keygen -q -t ed25519 -N '' -f /var/lib/terraform-ssh/ssh_host_ed25519_key
+        # sshd starts sessions with a clean environment. terraform-ssh loads
+        # the container variables from this file, quoted by "export -p".
+        export -p | grep -vE '^export (HOME|HOSTNAME|OLDPWD|PWD|SHLVL)=' \
+          > /var/lib/terraform-ssh/environment || true
         umask 022
-        exec /usr/sbin/sshd -D -e -f /home/.ssh/sshd_config
+        exec /usr/sbin/sshd -D -e -f /etc/ssh/ai-ide/sshd_config
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "2222"]
       interval: 2s
       retries: 15
+
+configs:
+  # An unprivileged sshd cannot bind port 22 or read /etc/ssh host keys, so it
+  # has its own config and a host key of its own. The home directory is the
+  # project the agent writes, so nothing is read from ~/.ssh there.
+  sshd_config:
+    content: |
+      Port 2222
+      HostKey /var/lib/terraform-ssh/ssh_host_ed25519_key
+      PidFile none
+      AuthorizedKeysFile /etc/ssh/ai-ide/authorized_keys
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitUserEnvironment no
+      PermitUserRC no
+      PermitTTY no
+      PermitTunnel no
+      DisableForwarding yes
+      ForceCommand /usr/local/bin/terraform-ssh
+
+  # Public key the agent logs in with. Set TERRAFORM_SSH_PUBKEY in the launcher
+  # .env, see README.md. "restrict" drops forwarding and the TTY for the key too.
+  authorized_keys:
+    content: |
+      restrict ${TERRAFORM_SSH_PUBKEY:?export TERRAFORM_SSH_PUBKEY in the ai-ide .env}
+
+  # The only program an SSH session can run.
+  terraform-ssh:
+    content: |
+      #!/bin/sh
+      # Runs "terraform ..." from SSH_ORIGINAL_COMMAND without a shell. The
+      # command is split on whitespace, quotes are not interpreted.
+      set -eu
+      set -f
+
+      deny() {
+        echo "terraform-ssh: $$*" >&2
+        echo "usage: terraform [-chdir=DIR] <subcommand> [args], paths inside the project" >&2
+        exit 126
+      }
+
+      set -- $${SSH_ORIGINAL_COMMAND:-}
+      [ "$${1:-}" = terraform ] || deny "only terraform can be run here"
+      shift
+
+      sub=
+      for arg do
+        # Absolute paths and parent references would let terraform read files
+        # outside the project, /proc/self/environ among them.
+        case $$arg in
+          /*|*=/*|*..*) deny "argument outside the project: $$arg" ;;
+        esac
+        if [ -z "$$sub" ]; then
+          case $$arg in
+            -*) ;;
+            *) sub=$$arg ;;
+          esac
+        fi
+      done
+
+      # Every subcommand except "console" (prints any expression, file()
+      # included), "login" and "logout" (write credentials). No subcommand is
+      # fine too: "terraform -version", "terraform -help".
+      case $$sub in
+        ''|init|validate|fmt|plan|apply|destroy|test|show|output|state) ;;
+        providers|version|graph|workspace|import|refresh|get) ;;
+        force-unlock|taint|untaint|modules|metadata) ;;
+        *) deny "terraform $$sub is not allowed" ;;
+      esac
+
+      # sshd has already changed to the home directory, the project.
+      . /var/lib/terraform-ssh/environment
+      exec /bin/terraform "$$@"

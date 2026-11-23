@@ -436,7 +436,9 @@ Everything in the service runs as the user who starts ai-ide: the same name,
 UID and GID as in the IDE container (`AI_USER`, `AI_UID`, `AI_GID`). The image
 is built on the first start with that account; the build is the only step that
 runs as root. sshd runs unprivileged as that user on port 2222, so it can log
-in no one else. The build uses `dockerfile_inline`, which needs the Docker
+in no one else. The user's home directory is the project, `/home/src`: SSH
+sessions start there, and whatever Terraform writes to its home
+(`~/.terraform.d`) ends up in the project, not in the container. The build uses `dockerfile_inline`, which needs the Docker
 buildx plugin (it ships with Docker Desktop and the `docker-buildx-plugin`
 package).
 
@@ -493,12 +495,40 @@ CONFIG_DIR=~/.config/ai-ide/$AI_PROFILE/my-project
 
    Without it, compose stops with an error and the session does not start.
 
-5. Start ai-ide as usual. Inside the container, the agent runs:
+5. Start ai-ide as usual. Inside the container, the agent runs one terraform
+   command per SSH call. `-chdir` is relative to the project:
 
    ```bash
-   ssh -F ~/.config/terraform-ssh/config terraform \
-     'cd /home/src && terraform init -input=false && terraform plan -no-color'
+   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra init -input=false
+   ssh -F ~/.config/terraform-ssh/config terraform terraform -chdir=infra plan -no-color
    ```
+
+#### What an SSH session can do
+
+The session runs terraform and nothing else. sshd sends every session through
+`ForceCommand /usr/local/bin/terraform-ssh`, which:
+
+- accepts only `terraform [global options] <subcommand> [args]`, split on
+  whitespace, and runs `/bin/terraform` in the project without a shell, so `;`,
+  `&&`, `|` and `$(...)` are passed to terraform as plain arguments;
+- refuses `terraform console` (it evaluates `file()` and any other
+  expression), `login` and `logout`;
+- refuses arguments with an absolute path or `..`, so `-chdir`,
+  `-var-file`, `-from-module` and the like stay inside the project.
+
+sshd also disables the TTY, sftp and scp, port, agent and X11 forwarding,
+`~/.ssh/rc` and `~/.ssh/environment`: the home directory is the project, which
+the agent writes, so sshd reads nothing from it. `terraform-ssh`, `sshd_config` and `authorized_keys` are compose
+configs: root owns them and they are read-only, so the session user cannot
+change them.
+
+What the agent can still reach: the service environment, provider credentials
+included, is not shown by any command, but the Terraform code itself runs in
+the service. Code the agent writes can read it with
+`file("/proc/self/environ")`, the `external` data source, a `local-exec`
+provisioner or a symlink in the project. These limits stop direct access, not a
+determined agent: give the runner only credentials you accept the agent seeing
+indirectly, for example a sandbox account or short-lived, narrowly scoped keys.
 
 Details:
 
@@ -508,12 +538,17 @@ Details:
   or user gets its own build.
 - The SSH port is not published on the host. Only public key logins are
   accepted, and passwords are disabled.
-- Files Terraform writes into the project (`.terraform`, lock files, local
-  state) belong to the same UID and GID as the files the IDE container writes.
+- Files Terraform writes into the project (`.terraform`, `.terraform.d`, lock
+  files, local state) belong to the same UID and GID as the files the IDE
+  container writes. A `.terraformrc` in the project root is Terraform's CLI
+  config.
 - sshd starts sessions with a clean environment. Every variable of the
-  service container is copied into the user's `~/.ssh/environment`, so
+  service container is saved to `/var/lib/terraform-ssh/environment`, outside
+  the project, and `terraform-ssh` loads it before it starts terraform. So
   provider credentials and `TF_VAR_*` belong in the service `environment:`
-  section of the compose file.
+  section of the compose file. The host key is kept in the same directory.
+- To allow another subcommand, edit the `case $$sub in` list of
+  `terraform-ssh` in the compose file.
 
 ### Skills
 

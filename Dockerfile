@@ -96,8 +96,8 @@ run if [ "$AGENT_AGY" = "true" ]; then \
   && rm -rf /root/.cache/antigravity; \
  fi
 run pkgs=""; \
- if [ "$AGENT_CLAUDE" = "true" ]; then pkgs="$pkgs @anthropic-ai/claude-code @zed-industries/claude-agent-acp"; fi; \
- if [ "$AGENT_CODEX" = "true" ]; then pkgs="$pkgs @openai/codex @zed-industries/codex-acp"; fi; \
+ if [ "$AGENT_CLAUDE" = "true" ]; then pkgs="$pkgs @anthropic-ai/claude-code @agentclientprotocol/claude-agent-acp"; fi; \
+ if [ "$AGENT_CODEX" = "true" ]; then pkgs="$pkgs @openai/codex @agentclientprotocol/codex-acp"; fi; \
  if [ -n "$pkgs" ]; then \
    npm install -g $pkgs \
    && npm cache clean --force; \

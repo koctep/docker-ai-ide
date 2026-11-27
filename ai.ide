@@ -413,6 +413,8 @@ fi
 [ "$IS_LINUX" = true ] && DOCKER_CMD="$DOCKER_CMD -v /tmp/.X11-unix:/tmp/.X11-unix"
 DOCKER_CMD="$DOCKER_CMD -v ${PWD}:/home/src"
 DOCKER_CMD="$DOCKER_CMD -w /home/src"
+# Every project is mounted at /home/src; tools that need its real name read AI_PROJECT.
+DOCKER_CMD="$DOCKER_CMD -e \"AI_PROJECT=${PRJ}\""
 DOCKER_CMD="$DOCKER_CMD -e DISPLAY=${DISPLAY_VAR}"
 DOCKER_CMD="$DOCKER_CMD -e HOME=/home"
 DOCKER_CMD="$DOCKER_CMD -e TMPDIR=${TMPDIR_VAR}"

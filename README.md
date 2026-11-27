@@ -615,7 +615,8 @@ TD_TIMELINE_DB=/home/timeline.db
 ```
 
 On the host the file is `~/.local/share/ai-ide/<profile>/timeline.db`.
-Each row is `ts` (set by SQLite), `project` (git toplevel name), `task_key`,
+Each row is `ts` (set by SQLite), `project` (`AI_PROJECT`, which the launcher
+sets to the host project directory name), `task_key`,
 `type`, `agent`, `model` and, for `test_end`, `exit_code`. A row means "started
 `type`"; durations are derived later from the sequence of rows. Run
 `td-log --help` for the accepted types.

@@ -9,6 +9,7 @@ SQLite itself.
   td-log run test [--task KEY] -- <command> [args...]
 
 TD_TIMELINE_DB unset: nothing is recorded and the command (if any) still runs.
+The project is $AI_PROJECT (set by ai-ide), otherwise the git checkout name.
 """
 
 import argparse
@@ -54,6 +55,9 @@ def git(*args):
 
 
 def project_name():
+    # ai-ide mounts every project at /home/src and passes the real name.
+    if os.environ.get("AI_PROJECT"):
+        return os.environ["AI_PROJECT"]
     # Linked worktrees (e.g. a triage baseline under /tmp) belong to the main
     # checkout, whose .git directory they share.
     common = git("rev-parse", "--path-format=absolute", "--git-common-dir")

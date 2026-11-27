@@ -6,6 +6,8 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 td_log="$repo_root/td-log"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/td-log.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+# ai-ide sets AI_PROJECT; start without it so git-based detection is tested.
+unset AI_PROJECT
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -54,6 +56,9 @@ git -C "$project" -c user.email=t@t -c user.name=t commit -q --allow-empty -m in
 git -C "$project" worktree add -q "$test_root/baseline-AIDA-1" HEAD
 (cd "$test_root/baseline-AIDA-1" && "$td_log" fix --task AIDA-1)
 
+# AI_PROJECT (set by ai-ide, where every project is /home/src) wins over git detection.
+(cd "$test_root/baseline-AIDA-1" && AI_PROJECT=real-name "$td_log" review --task AIDA-1)
+
 got=$(query "$db" "select project, task_key, type, agent, model, exit_code from events order by id")
 expected="my-project|AIDA-1|development|claude_code|opus|
 my-project|AIDA-1|review|codex||
@@ -62,7 +67,8 @@ my-project|AIDA-1|test|||
 my-project|AIDA-1|test_end|||0
 my-project|AIDA-1|test|||
 my-project|AIDA-1|test_end|||2
-my-project|AIDA-1|fix|||"
+my-project|AIDA-1|fix|||
+real-name|AIDA-1|review|||"
 [ "$got" = "$expected" ] || fail "unexpected rows:
 $got"
 

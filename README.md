@@ -601,6 +601,25 @@ When a new agent is added to the image, extend the target list with
 `AGENT_SKILLS_TARGETS` (space separated paths relative to `/home`) or change its
 default in `ai.ide`.
 
+### Event timeline (`td-log`)
+
+The image ships `/usr/local/bin/td-log`, which the ai-top-down skills call to
+append workflow events (step started, review, fix, test run, waiting for the
+user, ...) to a SQLite file. Nothing is recorded unless `TD_TIMELINE_DB` is
+set, so pass it through `.exports`; one file per profile keeps all projects
+in one place:
+
+```bash
+# ~/.config/ai-ide/<profile>/<project>/.exports
+TD_TIMELINE_DB=/home/timeline.db
+```
+
+On the host the file is `~/.local/share/ai-ide/<profile>/timeline.db`.
+Each row is `ts` (set by SQLite), `project` (git toplevel name), `task_key`,
+`type`, `agent`, `model` and, for `test_end`, `exit_code`. A row means "started
+`type`"; durations are derived later from the sequence of rows. Run
+`td-log --help` for the accepted types.
+
 ### Docker Build Arguments
 
 | Argument | Description | Default |
@@ -621,6 +640,8 @@ src/
 ├── Dockerfile              # Container definition
 ├── Makefile               # Build automation
 ├── ai.ide                 # Universal launcher script
+├── td-log                 # Top-Down event timeline writer, copied to /usr/local/bin
+├── tests/                 # Script tests (make test)
 ├── sshd/ai-ide.conf       # OpenSSH server config drop-in
 ├── example/compose.yaml   # Terraform runner over SSH, a development service example
 └── README.md             # This file

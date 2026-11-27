@@ -64,6 +64,9 @@ build build-nox build-all: force
 		--build-arg CURSOR_CLI_VERSION="$$ver" \
 		-t ai-ide
 
+test: force
+	sh tests/test-td-log.sh
+
 run: force
 	./cursor.ide bash
 
